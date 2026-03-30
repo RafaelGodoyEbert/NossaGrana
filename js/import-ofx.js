@@ -108,6 +108,8 @@ export function initImport(onImport, getAccounts, getTransactions, getFamilyProf
       const existing = getTransactions();
       const dbCounts = new Map(); // "key|date" -> count
       const dbInstallments = new Set(); // "base|amount|current/total" -> exists
+      const dbFitids = new Set(); // fitid -> true
+      const dbAutoInstallments = new Map(); // "instKey" -> tx (transações auto-geradas sem fitid)
       
       const normalizeDesc = (desc) => {
         if (!desc) return '';
@@ -122,6 +124,10 @@ export function initImport(onImport, getAccounts, getTransactions, getFamilyProf
       };
 
       for (const ex of existing) {
+        if (ex.fitid) {
+          dbFitids.add(ex.fitid);
+        }
+
         const exDate = ex.date?.toDate ? ex.date.toDate() : new Date(ex.date);
         const normBase = normalizeDesc(ex.description);
         const amountCents = Math.round(ex.amount * 100);
@@ -139,6 +145,11 @@ export function initImport(onImport, getAccounts, getTransactions, getFamilyProf
             const cleanInstCount = instCount.replace(/^0+/, '').replace(/\/0+/, '/'); 
             const instKey = `INST|${normBase}|${amountCents}|${cleanInstCount}`;
             dbInstallments.add(instKey);
+            
+            // Se for uma parcela auto-gerada (sem fitid), salvar no map para futura atualização
+            if (!ex.fitid) {
+              dbAutoInstallments.set(instKey, ex);
+            }
         }
       }
 
@@ -148,6 +159,7 @@ export function initImport(onImport, getAccounts, getTransactions, getFamilyProf
       allTransactions = allTransactions.map(t => {
         const cat = suggestCategory(t.description, family);
         let isDuplicate = false;
+        let updateTargetId = null;
         
         const normBase = normalizeDesc(t.description);
         const amountCents = Math.round(t.amount * 100);
@@ -156,30 +168,45 @@ export function initImport(onImport, getAccounts, getTransactions, getFamilyProf
 
         const isInstallment = t.description.includes('/') || t.installmentInfo;
         
-        if (isInstallment && (t.paymentMethod === 'credito' || t.description.startsWith('Cartão') || t.description.toLowerCase().includes('nupay'))) {
-          // Lógica de Parcelas: NÃO DEPENDE DE DATA
-          const instMatch = t.description.match(/(\d+\/\d+)$/);
-          const instCount = instMatch ? instMatch[1] : (t.installmentInfo ? `${t.installmentInfo.current}/${t.installmentInfo.total}` : '1/1');
-          const cleanInstCount = instCount.replace(/^0+/, '').replace(/\/0+/, '/');
-          const instKey = `INST|${normBase}|${amountCents}|${cleanInstCount}`;
-          
-          isDuplicate = dbInstallments.has(instKey) || importCounts.has(instKey);
-          if (!isDuplicate) importCounts.set(instKey, true); 
-        } else {
-          // Lógica de Contador (Pizzinhas): Mente aberta para múltiplas compras no mesmo dia
-          const dayKey = `${t.type}|${amountCents}|${dStr}|${normBase}`;
-          const currentInBatch = (importCounts.get(dayKey) || 0) + 1;
-          const alreadyInDB = dbCounts.get(dayKey) || 0;
-
-          // Só é duplicata se a "ocorrência X" no arquivo já existir no DB
-          if (currentInBatch <= alreadyInDB) {
+        if (t.fitid && dbFitids.has(t.fitid)) {
+            // Existe exatamente essa mesma transação já importada via OFX
             isDuplicate = true;
-          }
-          
-          importCounts.set(dayKey, currentInBatch);
+            importCounts.set(t.fitid, true);
+        } else if (t.fitid && importCounts.has(t.fitid)) {
+            isDuplicate = true;
+        } else {
+            if (isInstallment && (t.paymentMethod === 'credito' || t.description.startsWith('Cartão') || t.description.toLowerCase().includes('nupay'))) {
+              // Lógica de Parcelas: NÃO DEPENDE DE DATA
+              const instMatch = t.description.match(/(\d+\/\d+)$/);
+              const instCount = instMatch ? instMatch[1] : (t.installmentInfo ? `${t.installmentInfo.current}/${t.installmentInfo.total}` : '1/1');
+              const cleanInstCount = instCount.replace(/^0+/, '').replace(/\/0+/, '/');
+              const instKey = `INST|${normBase}|${amountCents}|${cleanInstCount}`;
+              
+              if (t.fitid && dbAutoInstallments.has(instKey)) {
+                  // Achou uma parcela gerada pelo sistema que bate com essa do OFX!
+                  updateTargetId = dbAutoInstallments.get(instKey).id;
+                  isDuplicate = false; // Não é duplicata, é um UPDATE!
+                  if (t.fitid) importCounts.set(t.fitid, true);
+              } else {
+                  isDuplicate = dbInstallments.has(instKey) || importCounts.has(instKey);
+                  if (!isDuplicate) importCounts.set(instKey, true); 
+              }
+            } else {
+              // Lógica de Contador (Pizzinhas): Mente aberta para múltiplas compras no mesmo dia
+              const dayKey = `${t.type}|${amountCents}|${dStr}|${normBase}`;
+              const currentInBatch = (importCounts.get(dayKey) || 0) + 1;
+              const alreadyInDB = dbCounts.get(dayKey) || 0;
+
+              // Só é duplicata se a "ocorrência X" no arquivo já existir no DB
+              if (currentInBatch <= alreadyInDB) {
+                isDuplicate = true;
+              }
+              
+              importCounts.set(dayKey, currentInBatch);
+            }
         }
 
-        return { ...t, category: cat, isDuplicate };
+        return { ...t, category: cat, isDuplicate, updateTargetId };
       });
     }
 
@@ -401,6 +428,7 @@ function parseNubankAccount(rows) {
       const paymentMethod = detectPaymentMethod(desc || '');
 
       txs.push({
+        fitid: _id?.trim() || null,
         date,
         description: cleanDesc || 'Transação bancária',
         amount,
@@ -471,6 +499,7 @@ function parseOFX(text) {
     const amount = extractOFXTag(block, 'TRNAMT');
     const memo = extractOFXTag(block, 'MEMO');
     const name = extractOFXTag(block, 'NAME');
+    const fitid = extractOFXTag(block, 'FITID');
 
     if (!dateStr || !amount) continue;
 
@@ -501,6 +530,7 @@ function parseOFX(text) {
 
         if (current >= 1 && total > 1 && total >= current) {
           txs.push({
+            fitid: fitid,
             date: new Date(date),
             description: cleanDesc,
             amount,
@@ -535,6 +565,7 @@ function parseOFX(text) {
       }
 
       txs.push({
+        fitid: fitid,
         date,
         description: cleanDesc,
         amount: Math.abs(rawVal),
@@ -751,6 +782,7 @@ function renderPreview(container, transactions, onImport, getAccounts, getFamily
                 <td>${t.date.toLocaleDateString('pt-BR')}</td>
                 <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${t.description}">
                   ${t.isDuplicate ? '<span style="background:var(--expense-color);color:#fff;padding:2px 6px;border-radius:4px;font-size:0.65rem;margin-right:6px;font-weight:bold;">Já existe</span>' : ''}
+                  ${t.updateTargetId ? '<span style="background:var(--primary-color);color:#fff;padding:2px 6px;border-radius:4px;font-size:0.65rem;margin-right:6px;font-weight:bold;" title="Esta transação atualizará uma parcela gerada anteriormente">🔄 Atualizar Parcela</span>' : ''}
                   ${t.invoicePayment ? '<span style="background:#3b82f6;color:#fff;padding:2px 6px;border-radius:4px;font-size:0.65rem;margin-right:6px;font-weight:bold;" title="Pagamento/crédito aplicado à fatura anterior">📋 Fatura Ant.</span>' : ''}
                   ${t.description}
                 </td>

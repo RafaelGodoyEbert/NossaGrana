@@ -278,8 +278,6 @@ async function loadAllData() {
   state.goals = data.userGoals;
   state.fixedBills = data.userFixedBills || [];
 
-  // Auto-liquidar faturas antigas de cartão de crédito
-  await autoSettleOldInvoices();
 
   state.familyProfiles = {};
   if (state.family && state.family.members) {
@@ -318,83 +316,6 @@ async function loadAllData() {
   );
 }
 
-/**
- * Auto-liquida transações de cartão de crédito de ciclos ANTIGOS (2+ ciclos atrás).
- * Também DESFAZ a liquidação incorreta do ciclo anterior (fatura atual).
- */
-async function autoSettleOldInvoices() {
-  if (!db) return;
-
-  for (const acc of state.accounts) {
-    if (acc.type !== 'cartao_credito' || !acc._prevCycleStart) continue;
-
-    const prevCycleStart = acc._prevCycleStart;
-    const prevCycleEnd = acc._prevCycleEnd;
-
-    // ---- PASSO 1: Desfazer liquidação incorreta do ciclo anterior ----
-    // O deploy anterior marcou transações do prevCycle como isPaid=true indevidamente.
-    // Precisamos restaurá-las para que a Fatura Atual funcione.
-    const txsToUnsettlePrev = state.transactions.filter(t => {
-      if (t.accountId !== acc.id || !t.isPaid) return false;
-      if (t.invoicePayment) return false; // Operações de fatura ficam como estão
-      const txDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-      return txDate >= prevCycleStart && txDate < prevCycleEnd;
-    });
-
-    if (txsToUnsettlePrev.length > 0) {
-      console.log(`Restaurando ${txsToUnsettlePrev.length} transações do ciclo anterior do ${acc.name} (${prevCycleStart.toLocaleDateString('pt-BR')} a ${prevCycleEnd.toLocaleDateString('pt-BR')})`);
-
-      for (let i = 0; i < txsToUnsettlePrev.length; i += 500) {
-        const chunk = txsToUnsettlePrev.slice(i, i + 500);
-        const batch = db.batch();
-        chunk.forEach(t => {
-          batch.update(db.collection('transactions').doc(t.id), { isPaid: false });
-        });
-        await batch.commit();
-      }
-      txsToUnsettlePrev.forEach(t => { t.isPaid = false; });
-
-      showToast(
-        'Fatura anterior restaurada',
-        `${txsToUnsettlePrev.length} transações do ciclo anterior foram restauradas para a Fatura Atual.`,
-        'info'
-      );
-    }
-
-    // ---- PASSO 2: Auto-liquidar faturas ANTIGAS (antes do ciclo anterior) ----
-    // Tudo antes do prevCycleStart é fatura que já deveria estar paga.
-    const txsToSettle = state.transactions.filter(t => {
-      if (t.accountId !== acc.id || t.isPaid) return false;
-      const txDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-      return txDate < prevCycleStart;
-    });
-
-    if (txsToSettle.length > 0) {
-      console.log(`Auto-liquidando ${txsToSettle.length} transações antigas do ${acc.name} (antes de ${prevCycleStart.toLocaleDateString('pt-BR')})`);
-
-      for (let i = 0; i < txsToSettle.length; i += 500) {
-        const chunk = txsToSettle.slice(i, i + 500);
-        const batch = db.batch();
-        chunk.forEach(t => {
-          batch.update(db.collection('transactions').doc(t.id), { isPaid: true });
-        });
-        await batch.commit();
-      }
-      txsToSettle.forEach(t => { t.isPaid = true; });
-
-      showToast(
-        'Faturas antigas liquidadas',
-        `${txsToSettle.length} transações anteriores ao ciclo atual foram marcadas como pagas.`,
-        'info'
-      );
-    }
-
-    // Recalcular saldos se houve mudanças
-    if (txsToUnsettlePrev.length > 0 || txsToSettle.length > 0) {
-      state.accounts = calculateBalances(state.accounts, state.transactions);
-    }
-  }
-}
 
 /**
  * Paga a fatura do ciclo anterior (fatura fechada / Fatura Atual).
@@ -571,7 +492,7 @@ async function handleImportedTransactions(importedTxs, accountId, userId) {
       isPaid = dateObj <= today;
     }
 
-    return {
+    let resultTx = {
       familyId: state.familyId,
       createdBy: selectedUserId,
       createdByName: selectedUserName,
@@ -586,6 +507,16 @@ async function handleImportedTransactions(importedTxs, accountId, userId) {
       paymentMethod: tx.paymentMethod || '',
       invoicePayment: tx.invoicePayment || false
     };
+
+    if (tx.fitid) {
+      resultTx.fitid = tx.fitid;
+    }
+
+    if (tx.updateTargetId) {
+      resultTx.id = tx.updateTargetId;
+    }
+
+    return resultTx;
   });
 
   // Show progress overlay
@@ -1396,9 +1327,11 @@ function renderAccounts() {
         const pct = limit > 0 ? Math.min((usedForLimit / limit) * 100, 100) : 0;
         const barColor = pct > 90 ? 'var(--expense-color)' : pct > 70 ? 'var(--warning-color)' : 'var(--primary-color)';
 
-        // Info do ciclo de faturamento (prevCycle = fatura atual fechada)
+        // Info do ciclo de faturamento
         const prevStartStr = acc._prevCycleStart ? acc._prevCycleStart.toLocaleDateString('pt-BR', {day:'2-digit', month:'short'}) : '?';
         const prevEndStr = acc._prevCycleEnd ? acc._prevCycleEnd.toLocaleDateString('pt-BR', {day:'2-digit', month:'short'}) : '?';
+        const currStartStr = acc._currentCycleStart ? acc._currentCycleStart.toLocaleDateString('pt-BR', {day:'2-digit', month:'short'}) : '?';
+        const currEndStr = acc._currentCycleEnd ? acc._currentCycleEnd.toLocaleDateString('pt-BR', {day:'2-digit', month:'short'}) : '?';
 
         statsHtml = `
               <div class="acc-stats" style="flex-direction:column;align-items:stretch;background:transparent;padding:0;">
@@ -1410,11 +1343,14 @@ function renderAccounts() {
                   <div style="width:${pct}%; background:${barColor}; height:100%; border-radius:4px; transition: width 0.3s;"></div>
                 </div>
                 <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;font-size:0.75rem;margin-top:10px;color:var(--text-secondary);gap:4px;">
-                  <span>📄 Fatura Atual (${prevStartStr} — ${prevEndStr}): <strong style="color:var(--expense-color);">${formatCurrency(Math.abs(invoiceBalance))}</strong></span>
-                  ${Math.abs(openCycle) > 0.01 ? `<span>🔄 Aberta: <strong style="color:var(--warning-color);">${formatCurrency(Math.abs(openCycle))}</strong></span>` : ''}
+                  ${Math.abs(invoiceBalance) > 0.01 ? `<span>📄 Fechada/Atrasada (${prevStartStr} — ${prevEndStr}): <strong style="color:var(--expense-color);">${formatCurrency(Math.abs(invoiceBalance))}</strong></span>` : ''}
+                  ${Math.abs(openCycle) > 0.01 ? `<span>🔄 Atual/Aberta (${currStartStr} — ${currEndStr}): <strong style="color:var(--warning-color);">${formatCurrency(Math.abs(openCycle))}</strong></span>` : ''}
                   ${Math.abs(futureDebt) > 0.01 ? `<span>📅 Futuras: <strong style="color:var(--text-secondary);">${formatCurrency(Math.abs(futureDebt))}</strong></span>` : ''}
                 </div>
                 <div style="margin-top:10px; display:flex; justify-content:flex-end; gap:6px;">
+                  <button class="btn btn-sm btn-primary" onclick="showInvoiceModal('${acc.id}')" title="Ver Detalhes da Fatura" style="font-size:0.65rem; padding:4px 8px; border:none; border-radius:6px; cursor:pointer;">
+                    <i class="fas fa-list-alt"></i> Ver Faturas
+                  </button>
                   <button class="btn btn-sm" onclick="payCurrentInvoice('${acc.id}')" title="Marcar fatura fechada como paga" style="font-size:0.65rem; padding:4px 10px; background:var(--success-color); color:#fff; border:none; border-radius:6px; cursor:pointer;">
                     <i class="fas fa-check-circle"></i> Pagar Fatura
                   </button>
@@ -3773,6 +3709,126 @@ async function handleDeleteAccount() {
     }
   }
 }
+
+window.showInvoiceModal = function(accountId) {
+  const acc = state.accounts.find(a => a.id === accountId);
+  if (!acc) return;
+
+  // Busca transações não pagas deste cartão
+  const txs = state.transactions.filter(t => t.accountId === accountId && !t.isPaid);
+
+  const fechada = [];
+  const aberta = [];
+  const futuras = [];
+
+  const cycleStart = acc._currentCycleStart ? acc._currentCycleStart.getTime() : 0;
+  const cycleEnd = acc._currentCycleEnd ? acc._currentCycleEnd.getTime() : 0;
+
+  txs.forEach(t => {
+    const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+    const time = d.getTime();
+
+    // Se é uma transação fixa futura sem date, pode dar bug, mas tDate já tem fallback
+    if (cycleStart > 0 && time < cycleStart) {
+      fechada.push(t);
+    } else if (cycleEnd > 0 && time > cycleEnd) {
+      futuras.push(t);
+    } else {
+      aberta.push(t);
+    }
+  });
+
+  // Ordenar por data
+  const sortByDate = (a, b) => {
+    const da = a.date?.toDate ? a.date.toDate() : new Date(a.date);
+    const db = b.date?.toDate ? b.date.toDate() : new Date(b.date);
+    return da.getTime() - db.getTime();
+  };
+  fechada.sort(sortByDate);
+  aberta.sort(sortByDate);
+  futuras.sort(sortByDate);
+
+  const renderTxList = (list) => {
+    if (list.length === 0) return '<p style="font-size:0.85rem; color:var(--text-secondary); padding:10px 0;">Nenhuma transação.</p>';
+    return list.map(t => {
+      const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+      const instInfo = t.installmentInfo ? ` <span style="font-size:0.7rem; color:var(--text-secondary);">(${t.installmentInfo.current}/${t.installmentInfo.total})</span>` : '';
+      return `
+        <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--border-color);">
+          <div style="flex:1;">
+            <div style="font-weight:600; font-size:0.9rem;">${t.description || t.name || 'Sem Descrição'}${instInfo}</div>
+            <div style="font-size:0.75rem; color:var(--text-secondary);">${d.toLocaleDateString('pt-BR')}</div>
+          </div>
+          <div style="font-weight:bold; color:var(--expense-color);">
+            ${formatCurrency(t.amount)}
+          </div>
+        </div>
+      `;
+    }).join('');
+  };
+
+  const sumList = (list) => list.reduce((s, t) => s + Math.abs(t.amount), 0);
+
+  // Injetar ou atualizar DIV no DOM
+  let modal = document.getElementById('invoice-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'invoice-modal';
+    modal.className = 'modal-container hidden';
+    // Fechar ao clicar fora
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeModal('invoice-modal');
+    });
+    document.body.appendChild(modal);
+  }
+
+  modal.innerHTML = `
+    <div class="modal-content" style="max-width: 600px; max-height: 90vh; display:flex; flex-direction:column;">
+      <button class="modal-close-btn" onclick="closeModal('invoice-modal')">&times;</button>
+      <h3 style="margin-bottom:16px;"><i class="fas fa-list-alt"></i> Detalhes da Fatura: ${acc.name}</h3>
+      
+      <div style="flex:1; overflow-y:auto; padding-right:8px;">
+        <!-- Fatura Fechada / Atrasada -->
+        <div style="margin-bottom:24px;">
+          <h4 style="border-bottom:2px solid var(--expense-color); padding-bottom:8px; display:flex; justify-content:space-between; align-items:flex-end;">
+            <span><i class="fas fa-file-invoice" style="color:var(--expense-color);"></i> Fechada / Atrasada</span>
+            <span style="color:var(--expense-color); font-size:1.1rem;">${formatCurrency(sumList(fechada))}</span>
+          </h4>
+          ${renderTxList(fechada)}
+        </div>
+
+        <!-- Fatura Aberta -->
+        <div style="margin-bottom:24px;">
+          <h4 style="border-bottom:2px solid var(--warning-color); padding-bottom:8px; display:flex; justify-content:space-between; align-items:flex-end;">
+            <span><i class="fas fa-sync-alt" style="color:var(--warning-color);"></i> Aberta (Atual)</span>
+            <span style="color:var(--warning-color); font-size:1.1rem;">${formatCurrency(sumList(aberta))}</span>
+          </h4>
+          ${renderTxList(aberta)}
+        </div>
+
+        <!-- Faturas Futuras -->
+        <div style="margin-bottom:16px;">
+          <h4 style="border-bottom:2px solid var(--text-secondary); padding-bottom:8px; display:flex; justify-content:space-between; align-items:flex-end;">
+            <span><i class="fas fa-calendar-alt" style="color:var(--text-secondary);"></i> Faturas Futuras (Parcelas)</span>
+            <span style="color:var(--text-primary); font-size:1.1rem;">${formatCurrency(sumList(futuras))}</span>
+          </h4>
+          ${renderTxList(futuras)}
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Adicionar atalho de teclado ESC se não tiver globalmente
+  const escHandler = (e) => {
+    if (e.key === 'Escape') {
+      closeModal('invoice-modal');
+      document.removeEventListener('keydown', escHandler);
+    }
+  };
+  document.addEventListener('keydown', escHandler);
+
+  openModal('invoice-modal');
+};
 
 window.showToast = showToast;
 

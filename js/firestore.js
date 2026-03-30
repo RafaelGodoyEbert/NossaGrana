@@ -104,8 +104,18 @@ export async function saveTransactionsBatch(transactions, onProgress) {
   if (isDemo()) {
     let saved = 0;
     for (const data of transactions) {
-      const id = demoId();
-      demoData.transactions.push({ id, ...data });
+      if (data.id) {
+        // Update existing in demo mode
+        const index = demoData.transactions.findIndex(t => t.id === data.id);
+        if (index !== -1) {
+          demoData.transactions[index] = { ...demoData.transactions[index], ...data };
+        } else {
+          demoData.transactions.push(data);
+        }
+      } else {
+        const id = demoId();
+        demoData.transactions.push({ id, ...data });
+      }
       saved++;
       if (onProgress && saved % 50 === 0) onProgress(saved, transactions.length);
     }
@@ -121,8 +131,15 @@ export async function saveTransactionsBatch(transactions, onProgress) {
     const batch = db.batch();
 
     for (const data of chunk) {
-      const ref = db.collection('transactions').doc();
-      batch.set(ref, data);
+      if (data.id) {
+        const ref = db.collection('transactions').doc(data.id);
+        const dataCopy = { ...data };
+        delete dataCopy.id; // avoid saving id as field if you don't want to
+        batch.set(ref, dataCopy, { merge: true });
+      } else {
+        const ref = db.collection('transactions').doc();
+        batch.set(ref, data);
+      }
     }
 
     await batch.commit();
@@ -317,9 +334,9 @@ export function calculateBalances(accounts, transactions) {
         currentCycleEnd = new Date(now.getFullYear(), now.getMonth(), closingDay);
       }
       prevCycleStart.setHours(0, 0, 0, 0);
-      prevCycleEnd.setHours(0, 0, 0, 0);
+      prevCycleEnd.setHours(23, 59, 59, 999);
       currentCycleStart.setHours(0, 0, 0, 0);
-      currentCycleEnd.setHours(0, 0, 0, 0);
+      currentCycleEnd.setHours(23, 59, 59, 999);
 
       let debtTotal = (acc.initialBalance || 0) + (acc.initialAdjustment || 0);
       
@@ -339,19 +356,22 @@ export function calculateBalances(accounts, transactions) {
         // Dívida Total: tudo não pago (para cálculo de limite disponível)
         if (!t.isPaid) {
           debtTotal -= amount;
-        }
 
-        // Fatura Atual (ciclo anterior fechado): IGNORA isPaid, IGNORA operações de fatura
-        // Isso garante que a fatura bata com o banco mesmo com auto-liquidação
-        if (!isInvoiceOp && txDate >= prevCycleStart && txDate < prevCycleEnd) {
-          invoiceBalance -= amount;
-        }
-
-        // Fatura Aberta (ciclo atual acumulando): transações até hoje
-        if (!isInvoiceOp && txDate >= currentCycleStart && txDate < currentCycleEnd && txDate <= now) {
-          openCycleBalance -= amount;
+          // Se for antes do ciclo atual (faturas fechadas e/ou atrasadas)
+          if (txDate < currentCycleStart) {
+            invoiceBalance -= amount;
+          }
+          // Se for no ciclo atual (fatura acumulando / aberta)
+          else if (txDate >= currentCycleStart && txDate < currentCycleEnd) {
+            openCycleBalance -= amount;
+          }
+          // Se for >= currentCycleEnd, vai cair na diferença (futureDebt)
         }
       });
+      
+      // Ajustes manuais/Saldo Inicial não têm data, então devem se refletir na fatura ATUAL (Aberta).
+      // Subtrair valor negativo soma ao balde positivo.
+      openCycleBalance -= ((acc.initialBalance || 0) + (acc.initialAdjustment || 0));
       
       acc.currentBalance = debtTotal;
       acc.currentInvoice = invoiceBalance;

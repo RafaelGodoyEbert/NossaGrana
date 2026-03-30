@@ -1,7 +1,6 @@
 // firebase-config.js — NossaGrana
 // Tenta carregar do localStorage ou do importFunc (Vite)
-const savedConfig = localStorage.getItem('nossagrana_fb_config');
-const firebaseConfig = savedConfig ? JSON.parse(savedConfig) : {
+const envConfig = {
   apiKey: import.meta.env?.VITE_FIREBASE_API_KEY || '',
   authDomain: import.meta.env?.VITE_FIREBASE_AUTH_DOMAIN || '',
   projectId: import.meta.env?.VITE_FIREBASE_PROJECT_ID || '',
@@ -10,8 +9,19 @@ const firebaseConfig = savedConfig ? JSON.parse(savedConfig) : {
   appId: import.meta.env?.VITE_FIREBASE_APP_ID || ''
 };
 
+const isConfigValid = (c) => c && c.apiKey && !String(c.apiKey).includes('undefined') && c.apiKey !== '';
+
+const savedConfigStr = localStorage.getItem('nossagrana_fb_config');
+const savedConfig = savedConfigStr ? JSON.parse(savedConfigStr) : null;
+
+// Prioridade: Se as chaves do Ambiente (GitHub Secrets) forem válidas, use-as.
+// Caso contrário, use o que estiver no localStorage.
+const firebaseConfig = isConfigValid(envConfig) ? envConfig : (savedConfig || envConfig);
+
 export const isFirebaseConfigured = () => {
-  return firebaseConfig && firebaseConfig.apiKey && !String(firebaseConfig.apiKey).includes('undefined');
+  const hasKeys = !!(firebaseConfig && firebaseConfig.apiKey && !String(firebaseConfig.apiKey).includes('undefined') && firebaseConfig.apiKey !== '');
+  console.log('Firebase Configured:', hasKeys ? 'YES' : 'NO (using fallback UI)');
+  return hasKeys;
 };
 
 export const saveFirebaseConfig = (config) => {

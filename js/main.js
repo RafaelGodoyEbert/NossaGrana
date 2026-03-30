@@ -319,28 +319,59 @@ async function loadAllData() {
 }
 
 /**
- * Auto-liquida transações de cartão de crédito de ciclos anteriores.
- * Toda transação com data anterior ao início do ciclo atual é marcada como isPaid=true.
+ * Auto-liquida transações de cartão de crédito de ciclos ANTIGOS (2+ ciclos atrás).
+ * Também DESFAZ a liquidação incorreta do ciclo anterior (fatura atual).
  */
 async function autoSettleOldInvoices() {
-  if (!db) return; // Sem DB no modo demo
+  if (!db) return;
 
   for (const acc of state.accounts) {
-    if (acc.type !== 'cartao_credito' || !acc._cycleStart) continue;
+    if (acc.type !== 'cartao_credito' || !acc._prevCycleStart) continue;
 
-    const cycleStart = acc._cycleStart;
+    const prevCycleStart = acc._prevCycleStart;
+    const prevCycleEnd = acc._prevCycleEnd;
 
-    // Encontrar transações não pagas anteriores ao ciclo atual
+    // ---- PASSO 1: Desfazer liquidação incorreta do ciclo anterior ----
+    // O deploy anterior marcou transações do prevCycle como isPaid=true indevidamente.
+    // Precisamos restaurá-las para que a Fatura Atual funcione.
+    const txsToUnsettlePrev = state.transactions.filter(t => {
+      if (t.accountId !== acc.id || !t.isPaid) return false;
+      if (t.invoicePayment) return false; // Operações de fatura ficam como estão
+      const txDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+      return txDate >= prevCycleStart && txDate < prevCycleEnd;
+    });
+
+    if (txsToUnsettlePrev.length > 0) {
+      console.log(`Restaurando ${txsToUnsettlePrev.length} transações do ciclo anterior do ${acc.name} (${prevCycleStart.toLocaleDateString('pt-BR')} a ${prevCycleEnd.toLocaleDateString('pt-BR')})`);
+
+      for (let i = 0; i < txsToUnsettlePrev.length; i += 500) {
+        const chunk = txsToUnsettlePrev.slice(i, i + 500);
+        const batch = db.batch();
+        chunk.forEach(t => {
+          batch.update(db.collection('transactions').doc(t.id), { isPaid: false });
+        });
+        await batch.commit();
+      }
+      txsToUnsettlePrev.forEach(t => { t.isPaid = false; });
+
+      showToast(
+        'Fatura anterior restaurada',
+        `${txsToUnsettlePrev.length} transações do ciclo anterior foram restauradas para a Fatura Atual.`,
+        'info'
+      );
+    }
+
+    // ---- PASSO 2: Auto-liquidar faturas ANTIGAS (antes do ciclo anterior) ----
+    // Tudo antes do prevCycleStart é fatura que já deveria estar paga.
     const txsToSettle = state.transactions.filter(t => {
       if (t.accountId !== acc.id || t.isPaid) return false;
       const txDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-      return txDate < cycleStart;
+      return txDate < prevCycleStart;
     });
 
     if (txsToSettle.length > 0) {
-      console.log(`Auto-liquidando ${txsToSettle.length} transações antigas do cartão ${acc.name} (antes de ${cycleStart.toLocaleDateString('pt-BR')})`);
+      console.log(`Auto-liquidando ${txsToSettle.length} transações antigas do ${acc.name} (antes de ${prevCycleStart.toLocaleDateString('pt-BR')})`);
 
-      // Batch update em chunks de 500
       for (let i = 0; i < txsToSettle.length; i += 500) {
         const chunk = txsToSettle.slice(i, i + 500);
         const batch = db.batch();
@@ -349,40 +380,40 @@ async function autoSettleOldInvoices() {
         });
         await batch.commit();
       }
-
-      // Atualizar estado local
       txsToSettle.forEach(t => { t.isPaid = true; });
-
-      // Recalcular saldos
-      state.accounts = calculateBalances(state.accounts, state.transactions);
 
       showToast(
         'Faturas antigas liquidadas',
-        `${txsToSettle.length} transações de ciclos anteriores do ${acc.name} foram marcadas como pagas.`,
+        `${txsToSettle.length} transações anteriores ao ciclo atual foram marcadas como pagas.`,
         'info'
       );
+    }
+
+    // Recalcular saldos se houve mudanças
+    if (txsToUnsettlePrev.length > 0 || txsToSettle.length > 0) {
+      state.accounts = calculateBalances(state.accounts, state.transactions);
     }
   }
 }
 
 /**
- * Paga a fatura atual do cartão de crédito.
- * Marca como isPaid=true todas as transações do ciclo atual (cycleStart até cycleEnd).
+ * Paga a fatura do ciclo anterior (fatura fechada / Fatura Atual).
+ * Marca como isPaid=true todas as transações do prevCycle.
  */
 window.payCurrentInvoice = async function(accountId) {
   const acc = state.accounts.find(a => a.id === accountId);
   if (!acc || acc.type !== 'cartao_credito') return;
   if (!db) { showToast('Modo Demo', 'Não disponível no modo demo.', 'warning'); return; }
 
-  const cycleStart = acc._cycleStart;
-  const cycleEnd = acc._cycleEnd;
-  if (!cycleStart || !cycleEnd) return;
+  const prevStart = acc._prevCycleStart;
+  const prevEnd = acc._prevCycleEnd;
+  if (!prevStart || !prevEnd) return;
 
-  // Encontrar transações não pagas no ciclo atual
+  // Encontrar transações não pagas no ciclo anterior (fatura fechada)
   const txsInCycle = state.transactions.filter(t => {
     if (t.accountId !== accountId || t.isPaid) return false;
     const txDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-    return txDate >= cycleStart && txDate < cycleEnd;
+    return txDate >= prevStart && txDate < prevEnd;
   });
 
   if (txsInCycle.length === 0) {
@@ -391,7 +422,7 @@ window.payCurrentInvoice = async function(accountId) {
   }
 
   const total = txsInCycle.reduce((s, t) => s + (t.type === 'despesa' ? t.amount : -t.amount), 0);
-  const cycleLabel = `${cycleStart.toLocaleDateString('pt-BR')} a ${cycleEnd.toLocaleDateString('pt-BR')}`;
+  const cycleLabel = `${prevStart.toLocaleDateString('pt-BR')} a ${prevEnd.toLocaleDateString('pt-BR')}`;
 
   if (!confirm(`💳 Pagar fatura do ciclo ${cycleLabel}?\n\n${txsInCycle.length} transação(ões) — Total: ${formatCurrency(Math.abs(total))}\n\nIsso marcará todas como PAGAS.`)) return;
 
@@ -1355,18 +1386,19 @@ function renderAccounts() {
       let statsHtml = '';
       if (acc.type === 'cartao_credito') {
         const limit = acc.creditLimit || 0;
-        const totalDebt = acc.currentBalance || 0; // Negativo (ex: -8000)
-        const invoiceBalance = acc.currentInvoice || 0; // Negativo (ex: -5000)
-        const futureDebt = totalDebt - invoiceBalance; // Negativo (ex: -3000)
+        const totalDebt = acc.currentBalance || 0;
+        const invoiceBalance = acc.currentInvoice || 0; // Fatura fechada (ciclo anterior)
+        const openCycle = acc.openCycleInvoice || 0; // Fatura aberta (acumulando)
+        const futureDebt = totalDebt - invoiceBalance - openCycle; // Parcelas futuras
 
         const usedForLimit = Math.abs(totalDebt);
         const available = Math.max(0, limit - usedForLimit);
         const pct = limit > 0 ? Math.min((usedForLimit / limit) * 100, 100) : 0;
         const barColor = pct > 90 ? 'var(--expense-color)' : pct > 70 ? 'var(--warning-color)' : 'var(--primary-color)';
 
-        // Info do ciclo de faturamento
-        const cycleStartStr = acc._cycleStart ? acc._cycleStart.toLocaleDateString('pt-BR', {day:'2-digit', month:'short'}) : '?';
-        const cycleEndStr = acc._cycleEnd ? acc._cycleEnd.toLocaleDateString('pt-BR', {day:'2-digit', month:'short'}) : '?';
+        // Info do ciclo de faturamento (prevCycle = fatura atual fechada)
+        const prevStartStr = acc._prevCycleStart ? acc._prevCycleStart.toLocaleDateString('pt-BR', {day:'2-digit', month:'short'}) : '?';
+        const prevEndStr = acc._prevCycleEnd ? acc._prevCycleEnd.toLocaleDateString('pt-BR', {day:'2-digit', month:'short'}) : '?';
 
         statsHtml = `
               <div class="acc-stats" style="flex-direction:column;align-items:stretch;background:transparent;padding:0;">
@@ -1377,12 +1409,13 @@ function renderAccounts() {
                 <div class="progress-bar" style="background:var(--bg-tertiary); height:8px; border-radius:4px; margin:0;">
                   <div style="width:${pct}%; background:${barColor}; height:100%; border-radius:4px; transition: width 0.3s;"></div>
                 </div>
-                <div style="display:flex;justify-content:space-between;align-items:center;font-size:0.75rem;margin-top:10px;color:var(--text-secondary);">
-                  <span>📄 Fatura Atual (${cycleStartStr} — ${cycleEndStr}): <strong style="color:var(--expense-color);">${formatCurrency(Math.abs(invoiceBalance))}</strong></span>
-                  ${Math.abs(futureDebt) > 0.01 ? `<span>📅 Parcelas Futuras: <strong style="color:var(--warning-color);">${formatCurrency(Math.abs(futureDebt))}</strong></span>` : ''}
+                <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;font-size:0.75rem;margin-top:10px;color:var(--text-secondary);gap:4px;">
+                  <span>📄 Fatura Atual (${prevStartStr} — ${prevEndStr}): <strong style="color:var(--expense-color);">${formatCurrency(Math.abs(invoiceBalance))}</strong></span>
+                  ${Math.abs(openCycle) > 0.01 ? `<span>🔄 Aberta: <strong style="color:var(--warning-color);">${formatCurrency(Math.abs(openCycle))}</strong></span>` : ''}
+                  ${Math.abs(futureDebt) > 0.01 ? `<span>📅 Futuras: <strong style="color:var(--text-secondary);">${formatCurrency(Math.abs(futureDebt))}</strong></span>` : ''}
                 </div>
                 <div style="margin-top:10px; display:flex; justify-content:flex-end; gap:6px;">
-                  <button class="btn btn-sm" onclick="payCurrentInvoice('${acc.id}')" title="Marcar fatura atual como paga" style="font-size:0.65rem; padding:4px 10px; background:var(--success-color); color:#fff; border:none; border-radius:6px; cursor:pointer;">
+                  <button class="btn btn-sm" onclick="payCurrentInvoice('${acc.id}')" title="Marcar fatura fechada como paga" style="font-size:0.65rem; padding:4px 10px; background:var(--success-color); color:#fff; border:none; border-radius:6px; cursor:pointer;">
                     <i class="fas fa-check-circle"></i> Pagar Fatura
                   </button>
                   <button class="btn btn-sm btn-secondary" onclick="cleanCreditCardDuplicates('${acc.id}')" title="Limpar duplicatas" style="font-size:0.65rem; padding:4px 8px;">

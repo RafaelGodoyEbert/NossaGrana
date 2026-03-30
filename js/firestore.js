@@ -288,47 +288,79 @@ export function calculateBalances(accounts, transactions) {
     if (acc.type === 'cartao_credito') {
       const closingDay = acc.closingDay || 1;
       
-      // Determinar ciclo de faturamento atual baseado no dia de fechamento.
-      // Ex: closingDay=14, hoje=30/03 → ciclo atual: 14/03 a 14/04
-      // Ex: closingDay=14, hoje=10/03 → ciclo atual: 14/02 a 14/03
-      let cycleStart, cycleEnd;
+      // ---- Determinar ciclos de faturamento ----
+      // Modelo Nubank:
+      //   - "Fatura Atual" = fatura FECHADA que precisa ser paga (ciclo anterior)
+      //   - "Fatura Aberta" = ciclo acumulando agora
+      //
+      // Ex: closingDay=14, hoje=30/03:
+      //   prevCycle:    14/fev → 14/mar  (Fatura Atual, vence ~14/abr)
+      //   currentCycle: 14/mar → 14/abr  (Fatura Aberta, acumulando)
+      //   Tudo antes de 14/fev = faturas antigas (provavelmente pagas)
+      //
+      // Ex: closingDay=14, hoje=10/03:
+      //   prevCycle:    14/jan → 14/fev  (Fatura Atual, vence ~14/mar)
+      //   currentCycle: 14/fev → 14/mar  (Fatura Aberta, acumulando)
+      
+      let prevCycleStart, prevCycleEnd, currentCycleStart, currentCycleEnd;
       if (now.getDate() >= closingDay) {
-        cycleStart = new Date(now.getFullYear(), now.getMonth(), closingDay);
-        cycleEnd = new Date(now.getFullYear(), now.getMonth() + 1, closingDay);
+        // Já passou o fechamento deste mês
+        prevCycleStart = new Date(now.getFullYear(), now.getMonth() - 1, closingDay);
+        prevCycleEnd = new Date(now.getFullYear(), now.getMonth(), closingDay);
+        currentCycleStart = new Date(now.getFullYear(), now.getMonth(), closingDay);
+        currentCycleEnd = new Date(now.getFullYear(), now.getMonth() + 1, closingDay);
       } else {
-        cycleStart = new Date(now.getFullYear(), now.getMonth() - 1, closingDay);
-        cycleEnd = new Date(now.getFullYear(), now.getMonth(), closingDay);
+        // Ainda não chegou no fechamento deste mês
+        prevCycleStart = new Date(now.getFullYear(), now.getMonth() - 2, closingDay);
+        prevCycleEnd = new Date(now.getFullYear(), now.getMonth() - 1, closingDay);
+        currentCycleStart = new Date(now.getFullYear(), now.getMonth() - 1, closingDay);
+        currentCycleEnd = new Date(now.getFullYear(), now.getMonth(), closingDay);
       }
-      cycleStart.setHours(0, 0, 0, 0);
-      cycleEnd.setHours(0, 0, 0, 0);
+      prevCycleStart.setHours(0, 0, 0, 0);
+      prevCycleEnd.setHours(0, 0, 0, 0);
+      currentCycleStart.setHours(0, 0, 0, 0);
+      currentCycleEnd.setHours(0, 0, 0, 0);
 
       let debtTotal = (acc.initialBalance || 0) + (acc.initialAdjustment || 0);
-      // Fatura Atual começa em 0: apenas transações do ciclo contam
-      // O initialBalance/initialAdjustment são calibrações históricas e NÃO devem
-      // inflar a fatura do ciclo atual.
+      
+      // Fatura Atual = soma das transações no ciclo ANTERIOR (fatura fechada)
+      // Calculada SEM considerar isPaid e SEM incluir operações de fatura,
+      // para sempre bater com o que o banco mostra.
       let invoiceBalance = 0;
+      
+      // Fatura Aberta = soma das transações no ciclo ATUAL (acumulando)
+      let openCycleBalance = 0;
 
       accTxs.forEach(t => {
+        const txDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+        const amount = t.type === 'receita' ? -t.amount : t.amount;
+        const isInvoiceOp = t.invoicePayment;
+        
+        // Dívida Total: tudo não pago (para cálculo de limite disponível)
         if (!t.isPaid) {
-          const txDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-          const amount = t.type === 'receita' ? -t.amount : t.amount;
-          
-          // Dívida Total (tudo que não foi pago — inclui parcelas futuras)
           debtTotal -= amount;
+        }
 
-          // Fatura Atual: APENAS transações dentro do ciclo atual que já aconteceram
-          // cycleStart (inclusive) até cycleEnd (exclusive), e data <= hoje
-          if (txDate >= cycleStart && txDate < cycleEnd && txDate <= now) {
-            invoiceBalance -= amount;
-          }
+        // Fatura Atual (ciclo anterior fechado): IGNORA isPaid, IGNORA operações de fatura
+        // Isso garante que a fatura bata com o banco mesmo com auto-liquidação
+        if (!isInvoiceOp && txDate >= prevCycleStart && txDate < prevCycleEnd) {
+          invoiceBalance -= amount;
+        }
+
+        // Fatura Aberta (ciclo atual acumulando): transações até hoje
+        if (!isInvoiceOp && txDate >= currentCycleStart && txDate < currentCycleEnd && txDate <= now) {
+          openCycleBalance -= amount;
         }
       });
       
       acc.currentBalance = debtTotal;
       acc.currentInvoice = invoiceBalance;
-      // Guardar limites do ciclo para uso na UI e liquidação
-      acc._cycleStart = cycleStart;
-      acc._cycleEnd = cycleEnd;
+      acc.openCycleInvoice = openCycleBalance;
+      // Guardar limites dos ciclos para uso na UI e liquidação
+      acc._prevCycleStart = prevCycleStart;
+      acc._prevCycleEnd = prevCycleEnd;
+      acc._currentCycleStart = currentCycleStart;
+      acc._currentCycleEnd = currentCycleEnd;
     } else {
       // Contas normais: considera tudo até hoje ou que já foi pago (mesmo se futuro)
       accTxs.forEach(t => {

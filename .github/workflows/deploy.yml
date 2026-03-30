@@ -21,15 +21,13 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
-          cache-dependency-path: 'nossagrana/package-lock.json'
+          cache-dependency-path: 'package-lock.json'
 
       - name: Install dependencies
         run: npm install
-        working-directory: nossagrana
 
       - name: Build
         run: npm run build
-        working-directory: nossagrana
         env:
           VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
           VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
@@ -41,5 +39,5 @@ jobs:
       - name: Deploy
         uses: JamesIves/github-pages-deploy-action@v4
         with:
-          folder: nossagrana/dist
+          folder: dist
           branch: gh-pages

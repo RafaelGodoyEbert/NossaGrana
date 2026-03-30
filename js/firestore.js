@@ -288,30 +288,34 @@ export function calculateBalances(accounts, transactions) {
     if (acc.type === 'cartao_credito') {
       const closingDay = acc.closingDay || 1;
       
-      // Próximo fechamento:
-      // Se hoje < closingDay, fecha este mês no dia closingDay.
-      // Se hoje >= closingDay, fecha mês que vem no dia closingDay.
-      let nextClosing;
-      if (now.getDate() < closingDay) {
-        nextClosing = new Date(now.getFullYear(), now.getMonth(), closingDay);
+      // Determinar ciclo de faturamento atual baseado no dia de fechamento.
+      // Ex: closingDay=14, hoje=30/03 → ciclo atual: 14/03 a 14/04
+      // Ex: closingDay=14, hoje=10/03 → ciclo atual: 14/02 a 14/03
+      let cycleStart, cycleEnd;
+      if (now.getDate() >= closingDay) {
+        cycleStart = new Date(now.getFullYear(), now.getMonth(), closingDay);
+        cycleEnd = new Date(now.getFullYear(), now.getMonth() + 1, closingDay);
       } else {
-        nextClosing = new Date(now.getFullYear(), now.getMonth() + 1, closingDay);
+        cycleStart = new Date(now.getFullYear(), now.getMonth() - 1, closingDay);
+        cycleEnd = new Date(now.getFullYear(), now.getMonth(), closingDay);
       }
+      cycleStart.setHours(0, 0, 0, 0);
+      cycleEnd.setHours(0, 0, 0, 0);
 
       let debtTotal = (acc.initialBalance || 0) + (acc.initialAdjustment || 0);
-      let invoiceBalance = debtTotal;
+      let invoiceBalance = (acc.initialBalance || 0) + (acc.initialAdjustment || 0);
 
       accTxs.forEach(t => {
         if (!t.isPaid) {
           const txDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
           const amount = t.type === 'receita' ? -t.amount : t.amount;
           
-          // Dívida Total (tudo que não foi pago)
+          // Dívida Total (tudo que não foi pago — inclui parcelas futuras)
           debtTotal -= amount;
 
-          // Fatura Atual (apenas o que vence até o próximo fechamento E já aconteceu hoje ou passado)
-          // Isso evita somar parcelas futuras que caem dentro do ciclo atual de fechamento
-          if (txDate < nextClosing && txDate <= now) {
+          // Fatura Atual: APENAS transações dentro do ciclo atual que já aconteceram
+          // cycleStart (inclusive) até cycleEnd (exclusive), e data <= hoje
+          if (txDate >= cycleStart && txDate < cycleEnd && txDate <= now) {
             invoiceBalance -= amount;
           }
         }
@@ -319,6 +323,9 @@ export function calculateBalances(accounts, transactions) {
       
       acc.currentBalance = debtTotal;
       acc.currentInvoice = invoiceBalance;
+      // Guardar limites do ciclo para uso na UI e liquidação
+      acc._cycleStart = cycleStart;
+      acc._cycleEnd = cycleEnd;
     } else {
       // Contas normais: considera tudo até hoje ou que já foi pago (mesmo se futuro)
       accTxs.forEach(t => {

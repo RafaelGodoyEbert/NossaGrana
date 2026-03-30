@@ -303,7 +303,10 @@ export function calculateBalances(accounts, transactions) {
       cycleEnd.setHours(0, 0, 0, 0);
 
       let debtTotal = (acc.initialBalance || 0) + (acc.initialAdjustment || 0);
-      let invoiceBalance = (acc.initialBalance || 0) + (acc.initialAdjustment || 0);
+      // Fatura Atual começa em 0: apenas transações do ciclo contam
+      // O initialBalance/initialAdjustment são calibrações históricas e NÃO devem
+      // inflar a fatura do ciclo atual.
+      let invoiceBalance = 0;
 
       accTxs.forEach(t => {
         if (!t.isPaid) {

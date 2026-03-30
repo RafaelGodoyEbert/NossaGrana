@@ -1690,6 +1690,11 @@ function renderPayables() {
       const category = t.category || 'Outros';
       const fixedBadge = isReminder ? '<span class="fixed-bill-badge"><i class="fas fa-redo"></i> Conta Fixa</span>' : '';
 
+      // Check if this transaction belongs to a credit card account
+      const txAccount = !isReminder ? state.accounts.find(a => a.id === t.accountId) : null;
+      const isCreditCard = txAccount && txAccount.type === 'cartao_credito';
+      const creditBadge = isCreditCard ? `<span style="background:var(--primary-700,#7c3aed);color:#fff;padding:1px 6px;border-radius:4px;font-size:0.65rem;font-weight:bold;margin-left:6px;"><i class="fas fa-credit-card" style="margin-right:2px;"></i>CARTÃO</span>` : '';
+
       const actionButtons = isReminder
         ? `<div class="payable-actions">
              <button class="btn-pay" onclick="payFixedBill('${t._fixedBillId}')" title="Registrar Pagamento"><i class="fas fa-check-circle"></i> Pagar</button>
@@ -1703,7 +1708,7 @@ function renderPayables() {
         <div class="payable-item">
           <div class="tx-icon ${isReminder ? '' : typeClass}" style="${isReminder ? 'color:var(--primary-600);' : ''}">${icon}</div>
           <div class="tx-details" style="flex:1;">
-            <div class="tx-desc" style="font-weight:600;">${t.description || t.name} ${fixedBadge}</div>
+            <div class="tx-desc" style="font-weight:600;">${t.description || t.name} ${fixedBadge}${creditBadge}</div>
             <div class="tx-meta" style="font-size:0.75rem; color:var(--text-secondary);">
               <span><i class="fas fa-calendar-alt"></i> ${formattedDate}</span>
               <span style="margin-left:8px;"><i class="fas fa-tag"></i> ${category}</span>
@@ -3091,6 +3096,8 @@ window.calibrateCreditCard = function() {
   const neededAdjustment = targetBalance - currentBalanceWithoutAdjustment;
 
   document.getElementById('acc-initial-adjustment').value = neededAdjustment.toFixed(2);
+  const txAdjField = document.getElementById('acc-initial-adjustment-tx');
+  if (txAdjField) txAdjField.value = neededAdjustment.toFixed(2);
   showToast('Calibrado!', `Ajuste de ${formatCurrency(neededAdjustment)} aplicado para bater o banco.`, 'success');
 };
 
@@ -3432,6 +3439,8 @@ document.getElementById('add-account-btn')?.addEventListener('click', () => {
   document.getElementById('account-form').reset();
   document.getElementById('acc-id').value = '';
   document.getElementById('acc-initial-adjustment').value = 0;
+  const txAdjField = document.getElementById('acc-initial-adjustment-tx');
+  if (txAdjField) txAdjField.value = 0;
   document.getElementById('account-modal-title').textContent = 'Nova Conta';
   document.getElementById('acc-credit-group')?.classList.add('hidden');
   openModal('account-modal');

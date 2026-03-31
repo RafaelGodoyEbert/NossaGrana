@@ -1,0 +1,17 @@
+{
+  "name": "NossaGrana",
+  "short_name": "NossaGrana",
+  "description": "App financeiro para casais — controle suas finanças juntos!",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#1e1e2e",
+  "theme_color": "#8b5cf6",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

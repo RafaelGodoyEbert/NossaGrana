@@ -265,3 +265,22 @@
   flex: 1;
   font-size: 0.8rem;
 }
+
+/* Full Page Chat Modifier */
+.chat-page-fullscreen {
+  height: calc(100vh - 180px);
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-full-page {
+  flex: 1;
+  margin-top: 0;
+  min-height: 500px;
+}
+
+.chat-full-page .chat-messages {
+  max-height: none;
+  flex: 1;
+}
+

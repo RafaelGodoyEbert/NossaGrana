@@ -6,6 +6,7 @@
   <title>NossaGrana — Finanças do Casal</title>
   <meta name="description" content="Controle financeiro para casais. Gerencie suas finanças juntos com chat inteligente.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💜</text></svg>">
+  <link rel="manifest" href="manifest.json">
 
   <!-- Font Awesome -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -162,6 +163,7 @@
           <li><a href="#" class="nav-link active" data-page="dashboard"><i class="fas fa-chart-pie"></i> Dashboard</a></li>
           <li><a href="#" class="nav-link" data-page="transactions"><i class="fas fa-exchange-alt"></i> Transações</a></li>
           <li><a href="#" class="nav-link" data-page="accounts"><i class="fas fa-wallet"></i> Contas</a></li>
+          <li><a href="#" class="nav-link" data-page="chat"><i class="fas fa-robot"></i> Assistente IA</a></li>
           <li><a href="#" class="nav-link" data-page="categories"><i class="fas fa-tags"></i> Categorias</a></li>
           <li><a href="#" class="nav-link" data-page="payables"><i class="fas fa-file-invoice-dollar"></i> Contas a Pagar</a></li>
           <li><a href="#" class="nav-link" data-page="planning"><i class="fas fa-bullseye"></i> Planejamento</a></li>
@@ -255,8 +257,9 @@
           </div>
 
           <!-- Chat AI -->
-          <div class="chat-container" id="chat-container">
-            <div class="chat-header">
+          <div id="dashboard-chat-wrapper">
+            <div class="chat-container" id="chat-container">
+              <div class="chat-header">
               <h3><span class="chat-status"></span> Assistente Financeiro</h3>
               <button class="btn-ghost" id="chat-ai-config-btn" title="Configurar IA"><i class="fas fa-cog"></i></button>
             </div>
@@ -291,6 +294,13 @@
               </div>
             </div>
           </div>
+        </section>
+
+        <!-- ===== CHAT PAGE ===== -->
+        <section id="chat-page" class="page hidden">
+          <h2><i class="fas fa-robot"></i> Assistente Financeiro</h2>
+          <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:var(--space-md);">Converse com nossa IA para tirar dúvidas, adicionar transações ou gerar relatórios.</p>
+          <div id="chat-page-wrapper" class="chat-page-fullscreen"></div>
         </section>
 
         <!-- ===== TRANSACTIONS ===== -->
@@ -616,6 +626,15 @@
           <h2><i class="fas fa-tools"></i> Ferramentas</h2>
 
           <div style="display:flex; flex-direction:column; gap:var(--space-lg);">
+            <!-- Instalar App -->
+            <div class="card-large" id="pwa-install-card" style="display:none; border:2px solid var(--primary-color);">
+              <h3><i class="fas fa-mobile-alt"></i> Instalar Aplicativo</h3>
+              <p style="margin-bottom:var(--space-lg); color:var(--text-secondary);">Instale o NossaGrana no seu celular ou computador para acesso rápido e experiência de aplicativo nativo.</p>
+              <button class="btn btn-primary" id="install-app-btn" style="width:100%;">
+                <i class="fas fa-download"></i> Instalar Agora
+              </button>
+            </div>
+
             <div class="card-large">
               <h3><i class="fas fa-calculator"></i> Calculadora de Juros Compostos</h3>
               <p style="margin-bottom:var(--space-lg); color:var(--text-secondary);">Calcule o crescimento do seu investimento com juros compostos e aportes mensais.</p>

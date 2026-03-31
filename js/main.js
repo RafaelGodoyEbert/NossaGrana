@@ -1254,11 +1254,19 @@ function renderAccounts() {
   // Calculate totals by type
   const typeMap = {};
   let grandTotal = 0;
+  let totalAvailableCredit = 0;
+
   state.accounts.forEach(acc => {
     // Para cartões, o "Saldo" que compõe o patrimônio líquido imediato é a Fatura Atual
     // Mas o saldo da conta em si (currentBalance) é a dívida total.
     const balanceToSum = acc.type === 'cartao_credito' ? (acc.currentInvoice || 0) : (acc.currentBalance || 0);
     grandTotal += balanceToSum;
+    
+    if (acc.type === 'cartao_credito') {
+      const limit = acc.creditLimit || 0;
+      const used = Math.abs(acc.currentBalance || 0); // dívida total consumindo limite
+      totalAvailableCredit += Math.max(0, limit - used);
+    }
     
     if (!typeMap[acc.type]) typeMap[acc.type] = { balance: 0, accounts: [] };
     typeMap[acc.type].balance += balanceToSum;
@@ -1269,7 +1277,7 @@ function renderAccounts() {
     conta_corrente: { label: 'Conta Corrente', icon: 'fas fa-university', cssClass: 'corrente' },
     poupanca: { label: 'Poupança', icon: 'fas fa-piggy-bank', cssClass: 'poupanca' },
     investimento: { label: 'Investimento', icon: 'fas fa-chart-line', cssClass: 'investimento' },
-    cartao_credito: { label: 'Cartão de Crédito', icon: 'fas fa-credit-card', cssClass: 'carteira' },
+    cartao_credito: { label: 'Faturas (Cartão)', icon: 'fas fa-file-invoice-dollar', cssClass: 'carteira' },
     carteira: { label: 'Carteira', icon: 'fas fa-money-bill-wave', cssClass: 'carteira' }
   };
 
@@ -1284,7 +1292,23 @@ function renderAccounts() {
     </div>
     ${Object.entries(typeMap).map(([type, data]) => {
     const cfg = typeConfig[type] || { label: type, icon: 'fas fa-wallet', cssClass: 'total' };
+    
+    let extraCard = '';
+    if (type === 'cartao_credito') {
+      extraCard = `
+      <div class="acc-summary-card" style="border-bottom: 4px solid var(--primary-color);">
+        <div class="acc-icon" style="background:rgba(99,102,241,0.2);color:var(--primary-color);">
+          <i class="fas fa-credit-card"></i>
+        </div>
+        <div class="acc-summary-content">
+          <span class="acc-summary-label">Crédito Disponível</span>
+          <span class="acc-summary-value text-income" style="color:var(--primary-color)!important;">${formatCurrency(totalAvailableCredit)}</span>
+        </div>
+      </div>`;
+    }
+
     return `
+      ${extraCard}
       <div class="acc-summary-card">
         <div class="acc-icon ${cfg.cssClass}"><i class="${cfg.icon}"></i></div>
         <div class="acc-summary-content">
@@ -1318,9 +1342,9 @@ function renderAccounts() {
       if (acc.type === 'cartao_credito') {
         const limit = acc.creditLimit || 0;
         const totalDebt = acc.currentBalance || 0;
-        const invoiceBalance = acc.currentInvoice || 0; // Fatura fechada (ciclo anterior)
-        const openCycle = acc.openCycleInvoice || 0; // Fatura aberta (acumulando)
-        const futureDebt = totalDebt - invoiceBalance - openCycle; // Parcelas futuras
+        const invoiceBalance = acc._closedDebt || 0; // Fatura fechada (atrasada)
+        const openCycle = acc._openDebt || 0; // Fatura aberta (atual)
+        const futureDebt = acc._futureDebt || 0; // Parcelas futuras
 
         const usedForLimit = Math.abs(totalDebt);
         const available = Math.max(0, limit - usedForLimit);
@@ -1395,76 +1419,219 @@ function renderAccounts() {
 
 // Cleanup function for credit card duplicates
 window.cleanCreditCardDuplicates = async function(accountId) {
-  const acc = state.accounts.find(a => a.id === accountId);
-  if (!acc) return;
+  let accName = "Todas as Contas";
+  let accTxs = [...state.transactions];
 
-  const msg = `Deseja analisar duplicatas para o cartão "${acc.name}"?\n\nIsso buscará transações com o mesmo valor, mesma data e descrições semelhantes.`;
+  if (accountId) {
+    const acc = state.accounts.find(a => a.id === accountId);
+    if (!acc) return;
+    accName = acc.name;
+    accTxs = accTxs.filter(t => t.accountId === accountId);
+  }
+
+  const msg = accountId ? `Deseja analisar possíveis duplicatas para a conta "${accName}"?` : `Deseja analisar possíveis duplicatas em TODAS as suas contas?`;
   if (!confirm(msg)) return;
 
-  const accTxs = [...state.transactions].filter(t => t.accountId === accountId).sort((a,b) => {
+  accTxs.sort((a,b) => {
     const da = a.date?.toDate ? a.date.toDate() : new Date(a.date);
     const db = b.date?.toDate ? b.date.toDate() : new Date(b.date);
     return da - db;
   });
 
-  const toDelete = [];
-  const seenKeys = new Map();
+  const groups = [];
+  const used = new Set();
 
-  accTxs.forEach(t => {
-    const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-    // Key: Amount | Year | Month | Day | Prefix(8 chars of desc)
-    const dayKey = `${Math.round(t.amount * 100)}|${d.getFullYear()}|${d.getMonth()}|${d.getDate()}|${(t.description || '').substring(0, 8).toLowerCase()}`;
+  for (let i = 0; i < accTxs.length; i++) {
+    if (used.has(i)) continue;
+    const t1 = accTxs[i];
+    const d1 = t1.date?.toDate ? t1.date.toDate() : new Date(t1.date);
+    const amount1 = Math.round(t1.amount * 100);
+
+    const matchGroup = [t1];
     
-    // For installments, we might want to check just Month/Year
-    const isInstallment = t.description.includes('/') || t.installmentInfo;
-    const instKey = isInstallment ? `${Math.round(t.amount * 100)}|${d.getFullYear()}|${d.getMonth()}|${(t.description || '').substring(0, 8).toLowerCase()}` : null;
+    for (let j = i + 1; j < accTxs.length; j++) {
+      if (used.has(j)) continue;
+      const t2 = accTxs[j];
+      const d2 = t2.date?.toDate ? t2.date.toDate() : new Date(t2.date);
+      const amount2 = Math.round(t2.amount * 100);
+      
+      const diffDays = Math.abs((d1 - d2) / (1000 * 60 * 60 * 24));
+      
+      if (amount1 === amount2 && t1.type === t2.type && t1.accountId === t2.accountId) {
+         const desc1 = (t1.description || t1.category || '').toLowerCase();
+         const desc2 = (t2.description || t2.category || '').toLowerCase();
+         
+         // 0. Proteção absoluta contra parcelas distintas marcadas erroneamente
+         const instRegex = /\b(\d+)\/(\d+)\b/;
+         const instMatch1 = desc1.match(instRegex);
+         const instMatch2 = desc2.match(instRegex);
+         
+         if (instMatch1 && instMatch2) {
+             // Se ambos possuem assinatura de parcela (ex: 1/4 e 2/4), a parcela atual TEM que ser a mesma
+             if (instMatch1[1] !== instMatch2[1] || instMatch1[2] !== instMatch2[2]) {
+                 continue; // São parcelas diferentes na sequência, NUNCA são duplicatas
+             }
+         }
 
-    if (seenKeys.has(dayKey)) {
-      const original = seenKeys.get(dayKey);
-      identifyDuplicate(t, original, dayKey);
-    } else if (instKey && seenKeys.has(instKey)) {
-      const original = seenKeys.get(instKey);
-      identifyDuplicate(t, original, instKey);
-    } else {
-      seenKeys.set(dayKey, t);
-      if (instKey) seenKeys.set(instKey, t);
+         // 1. Se ambas são de OFX e possuem IDs diferentes originais do banco, NUNCA são duplicatas
+         if (t1.fitid && t2.fitid && t1.fitid !== t2.fitid) {
+             continue;
+         }
+
+         // 2. Se possuírem o mesmíssimo ID de OFX (erro de gravação dupla banco de dados)
+         if (t1.fitid && t2.fitid && t1.fitid === t2.fitid) {
+             // Bancos como Nubank usam o mesmo FITID para diferentes parcelas em meses diferentes!
+             // Só é duplicata se ocorrer no mesmo dia ou quase mesmo dia, e como protegemos parcelas no passo 0, é blindado.
+             if (diffDays <= 2) {
+                 matchGroup.push(t2);
+                 used.add(j);
+             }
+             continue;
+         }
+
+         const len = Math.min(4, desc1.length, desc2.length);
+         const prefixMatch = len > 0 && desc1.substring(0, len) === desc2.substring(0, len);
+         const isInst = desc1.includes('/') || desc2.includes('/') || t1.installmentInfo || t2.installmentInfo;
+         
+         // Verifica se uma tem procedência OFX (fitid) e a outra é manual (sem fitid)
+         const oneIsOfx = (t1.fitid || t2.fitid) && (!t1.fitid || !t2.fitid);
+
+         // 3. Casamento de OFX com Manual (tolerância de até 7 dias, mas exige prefixo igual ou ser parcela)
+         if (oneIsOfx && diffDays <= 7 && (prefixMatch || isInst)) {
+             matchGroup.push(t2);
+             used.add(j);
+             continue;
+         }
+
+         // 4. Ambas manuais (ou origens antigas sem fitid): exige mesmo dia e descrição similar
+         if (!oneIsOfx && diffDays === 0 && prefixMatch) {
+             matchGroup.push(t2);
+             used.add(j);
+             continue;
+         }
+      }
     }
-  });
-
-  function identifyDuplicate(current, original, key) {
-    const isThisAuto = current.original && current.original.includes('Auto-gerada');
-    const isOriginalAuto = original.original && original.original.includes('Auto-gerada');
     
-    if (isThisAuto && !isOriginalAuto) {
-      toDelete.push(current.id);
-    } else if (!isThisAuto && isOriginalAuto) {
-      toDelete.push(original.id);
-      seenKeys.set(key, current);
-    } else {
-      toDelete.push(current.id);
+    if (matchGroup.length > 1) {
+       groups.push(matchGroup);
     }
   }
 
-  if (toDelete.length === 0) {
-    showToast('Limpeza concluída', 'Nenhuma duplicata óbvia encontrada.', 'info');
+  if (groups.length === 0) {
+    showToast('Limpeza concluída', 'Nenhuma possível duplicata encontrada.', 'info');
     return;
   }
 
-  if (!confirm(`Encontramos ${toDelete.length} possíveis duplicatas. Deseja removê-las para ajustar o saldo?`)) return;
+  // Montar HTML do Modal
+  let modalHtml = `
+  <div id="duplicates-modal-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;">
+    <div style="background:var(--bg-secondary,#1e1e2e);border-radius:16px;width:100%;max-width:700px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,0.5);">
+      <div style="padding:20px;border-bottom:1px solid var(--border-color,rgba(255,255,255,0.1));display:flex;justify-content:space-between;align-items:center;">
+        <h2 style="margin:0;font-size:1.3rem;"><i class="fas fa-copy" style="color:var(--primary-color);"></i> Analisar Duplicatas</h2>
+        <button onclick="document.getElementById('duplicates-modal-overlay').remove()" style="background:transparent;border:none;color:var(--text-secondary);cursor:pointer;font-size:1.2rem;"><i class="fas fa-times"></i></button>
+      </div>
+      <div style="padding:20px;overflow-y:auto;flex:1;">
+        <p style="color:var(--text-secondary);margin-bottom:20px;">Estes agrupamentos possuem o mesmo valor e datas próximas. <strong>Selecione os que deseja EXCLUIR.</strong></p>
+  `;
 
-  try {
-    let deletedCount = 0;
-    // Batch delete would be better, but let's do sequential for safety with toast updates
-    for (const id of toDelete) {
-      await deleteTransaction(id);
-      deletedCount++;
+  groups.forEach((g, idx) => {
+    // Ordena: Preserva elementos com FITID (importados) e mais antigas na garantia
+    g.sort((a,b) => {
+      if (a.fitid && !b.fitid) return -1;
+      if (!a.fitid && b.fitid) return 1;
+      const da = a.date?.toDate ? a.date.toDate() : new Date(a.date);
+      const db = b.date?.toDate ? b.date.toDate() : new Date(b.date);
+      return da - db;
+    });
+
+    modalHtml += `
+      <div style="background:var(--bg-tertiary,rgba(255,255,255,0.03));border:1px solid var(--border-color,rgba(255,255,255,0.1));border-radius:12px;margin-bottom:16px;overflow:hidden;">
+        <div style="background:rgba(0,0,0,0.2);padding:10px 15px;font-weight:bold;font-size:0.9rem;border-bottom:1px solid var(--border-color,rgba(255,255,255,0.1));display:flex;justify-content:space-between;">
+          <span>Grupo ${idx + 1} — R$ ${formatCurrency(g[0].amount)}</span>
+          <span style="color:var(--text-secondary);font-size:0.8rem;">${g.length} itens</span>
+        </div>
+        <div style="padding:10px;">
+    `;
+
+    g.forEach((t, tIdx) => {
+      const isChecked = tIdx > 0; // Marca todos pra exclusão, exceto o primeiro (melhor candidato a manter)
+      const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+      modalHtml += `
+          <label style="display:flex;align-items:center;padding:8px;border-radius:8px;cursor:pointer;gap:12px;transition:background 0.2s;${isChecked ? 'background:rgba(239,68,68,0.1);' : ''}">
+            <input type="checkbox" class="dup-checkbox" value="${t.id}" ${isChecked ? 'checked' : ''} style="width:18px;height:18px;accent-color:var(--expense-color);">
+            <div style="flex:1;">
+              <div style="font-weight:500;font-size:0.95rem;">${t.description || t.category}</div>
+              <div style="font-size:0.8rem;color:var(--text-secondary);">
+                ${d.toLocaleDateString('pt-BR')} • ${t.category} ${t.fitid ? ' <span style="color:var(--success-color);font-size:0.75rem;margin-left:6px;"><i class="fas fa-link"></i> Importado (OFX)</span>' : ''}
+              </div>
+            </div>
+          </label>
+      `;
+    });
+
+    modalHtml += `
+        </div>
+      </div>
+    `;
+  });
+
+  modalHtml += `
+      </div>
+      <div style="padding:20px;border-top:1px solid var(--border-color,rgba(255,255,255,0.1));display:flex;justify-content:flex-end;gap:12px;">
+        <button class="btn btn-secondary" onclick="document.getElementById('duplicates-modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" id="confirm-duplicates-btn" style="background:var(--expense-color);border-color:var(--expense-color);color:#fff;">
+          <i class="fas fa-trash-alt"></i> Remover Selecionados
+        </button>
+      </div>
+    </div>
+  </div>
+  `;
+
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = modalHtml;
+  document.body.appendChild(tempDiv.firstElementChild);
+
+  const overlay = document.getElementById('duplicates-modal-overlay');
+  const checkboxes = overlay.querySelectorAll('.dup-checkbox');
+  checkboxes.forEach(cb => {
+    cb.addEventListener('change', (e) => {
+      const label = e.target.closest('label');
+      if (e.target.checked) {
+        label.style.background = 'rgba(239,68,68,0.1)';
+      } else {
+        label.style.background = 'transparent';
+      }
+    });
+  });
+
+  document.getElementById('confirm-duplicates-btn').addEventListener('click', async () => {
+    const toDeleteIds = Array.from(overlay.querySelectorAll('.dup-checkbox:checked')).map(cb => cb.value);
+    
+    if (toDeleteIds.length === 0) {
+      overlay.remove();
+      return;
     }
-    showToast('Sucesso!', `${deletedCount} transações duplicadas removidas.`, 'success');
-    await loadAllData();
-  } catch (err) {
-    console.error('Cleanup error:', err);
-    showToast('Erro na limpeza', err.message, 'error');
-  }
+
+    const btn = document.getElementById('confirm-duplicates-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Removendo...';
+
+    try {
+      let deletedCount = 0;
+      for (const id of toDeleteIds) {
+        await deleteTransaction(id);
+        deletedCount++;
+      }
+      showToast('Sucesso!', `${deletedCount} transações removidas.`, 'success');
+      overlay.remove();
+      await loadAllData();
+    } catch (err) {
+      console.error('Duplicate removal error:', err);
+      showToast('Erro', 'Não foi possível remover.', 'error');
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-trash-alt"></i> Remover Selecionados';
+    }
+  });
 };
 
 // ============================
@@ -2775,9 +2942,22 @@ function navigateTo(page) {
   const titles = {
     dashboard: 'Dashboard', transactions: 'Transações', accounts: 'Contas',
     categories: 'Categorias', planning: 'Planejamento Financeiro', payables: 'Contas a Pagar',
-    reports: 'Relatórios', import: 'Importar Extrato', tools: 'Ferramentas', profile: 'Perfil & Família'
+    reports: 'Relatórios', import: 'Importar Extrato', tools: 'Ferramentas', profile: 'Perfil & Família',
+    chat: 'Assistente IA'
   };
   document.getElementById('page-title').textContent = titles[page] || page;
+
+  // Render chat container conditionally
+  const chatContainer = document.getElementById('chat-container');
+  if (chatContainer) {
+    if (page === 'chat') {
+      document.getElementById('chat-page-wrapper')?.appendChild(chatContainer);
+      chatContainer.classList.add('chat-full-page');
+    } else {
+      document.getElementById('dashboard-chat-wrapper')?.appendChild(chatContainer);
+      chatContainer.classList.remove('chat-full-page');
+    }
+  }
 }
 
 // ============================
@@ -3626,62 +3806,7 @@ async function handleResetData() {
 }
 
 async function handleRemoveDuplicates() {
-  if (!confirm('Esta ferramenta inteligente irá procurar e remover transações que representam a mesma despesa ou parcela, mesmo que os nomes variem ligeiramente.\n\nDeseja continuar?')) return;
-
-  const normalizeDesc = (desc) => {
-    if (!desc) return '';
-    return desc.toLowerCase()
-               .replace(/ - parcela \d+\/\d+$/i, '')
-               .replace(/ - \d+\/\d+$/i, '')
-               .replace(/^cartão - /, '')
-               .replace(/^nupay - /, '')
-               .replace(/\s+/g, '')
-               .trim();
-  };
-
-  const txs = state.transactions;
-  const seenInstallments = new Set();
-  const seenNormalCounts = new Map(); // key|date -> count
-  const toDelete = [];
-
-  txs.forEach(t => {
-    const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-    const normBase = normalizeDesc(t.description || '');
-    const amountCents = Math.round(t.amount * 100);
-    const instMatch = (t.description || '').match(/(\d+\/\d+)$/);
-    const inst = instMatch ? instMatch[1] : (t.installmentInfo ? `${t.installmentInfo.current}/${t.installmentInfo.total}` : null);
-
-    if (inst) {
-      // Regra para parcelas: Chave Global (Pichau)
-      const instKey = `INST|${normBase}|${amountCents}|${inst.replace(/^0+/, '').replace(/\/0+/, '/')}`;
-      if (seenInstallments.has(instKey)) {
-        toDelete.push(t.id);
-      } else {
-        seenInstallments.add(instKey);
-      }
-    } else {
-      // Regra para transações normais: Chave Diária (Pizzinha)
-      // Como não sabemos a origem (se é real ou erro), somos conservadores na limpeza de extrato
-      // Mas para o IMPORT, o contador do CSV resolve. No CLEANUP, só removemos se for 100% idêntica e estiver sobrando
-      // No momento, vamos focar em limpar as Pichaus que são o maior problema
-    }
-  });
-
-  if (toDelete.length === 0) {
-    showToast('Nenhuma duplicata', 'Seu histórico já parece estar limpo!', 'info');
-    return;
-  }
-
-  if (!confirm(`Foram encontradas ${toDelete.length} transações duplicadas ou redundantes. Deseja removê-las para organizar seu extrato?`)) return;
-
-  try {
-    const deleted = await deleteTransactionsBatch(toDelete);
-    showToast('Limpeza concluída', `${deleted} duplicatas removidas. Seu extrato está organizado!`, 'success');
-    await loadAllData();
-  } catch (err) {
-    console.error(err);
-    showToast('Erro na limpeza', 'Ocorreu um erro ao tentar remover as duplicatas.', 'error');
-  }
+  await cleanCreditCardDuplicates(null);
 }
 
 async function handleDeleteAccount() {
@@ -3714,111 +3839,285 @@ window.showInvoiceModal = function(accountId) {
   const acc = state.accounts.find(a => a.id === accountId);
   if (!acc) return;
 
-  // Busca transações não pagas deste cartão
-  const txs = state.transactions.filter(t => t.accountId === accountId && !t.isPaid);
+  const txs = [...state.transactions.filter(t => t.accountId === accountId)];
+  
+  // Incluir saldo inicial como despesa/receita invisível no passado
+  const initialVal = (acc.initialBalance || 0) + (acc.initialAdjustment || 0);
+  if (Math.abs(initialVal) > 0.01) {
+    txs.push({
+      id: 'initial_balance_dummy',
+      description: 'Saldo Inicial Original',
+      amount: Math.abs(initialVal),
+      type: initialVal < 0 ? 'despesa' : 'receita',
+      date: new Date(2000, 0, 1), // Muito no passado para cair na primeira fatura
+      isPaid: false
+    });
+  }
 
-  const fechada = [];
-  const aberta = [];
-  const futuras = [];
+  // Determinar faturas
+  const invoices = {};
+  const currentMonthDate = new Date();
+  const closingDay = acc.closingDay || 1;
+  const currentDay = currentMonthDate.getDate();
 
-  const cycleStart = acc._currentCycleStart ? acc._currentCycleStart.getTime() : 0;
-  const cycleEnd = acc._currentCycleEnd ? acc._currentCycleEnd.getTime() : 0;
+  const getCycleKey = (date) => {
+    const m = date.toLocaleString('pt-BR', { month: 'short' }).toUpperCase().replace('.', '');
+    const y = date.getFullYear().toString().slice(2);
+    return `${m} ${y}`;
+  };
+
+  const formatExtMonth = (date) => {
+    const m = date.toLocaleString('pt-BR', { month: 'long' });
+    return m.charAt(0).toUpperCase() + m.slice(1);
+  };
 
   txs.forEach(t => {
-    const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-    const time = d.getTime();
+    const txDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+    
+    let cycleMonthDate = new Date(txDate.getFullYear(), txDate.getMonth(), closingDay);
+    if (txDate.getDate() >= closingDay) {
+        cycleMonthDate.setMonth(cycleMonthDate.getMonth() + 1);
+    }
+    
+    const cycleKey = getCycleKey(cycleMonthDate);
+    const timeValue = cycleMonthDate.getTime();
 
-    // Se é uma transação fixa futura sem date, pode dar bug, mas tDate já tem fallback
-    if (cycleStart > 0 && time < cycleStart) {
-      fechada.push(t);
-    } else if (cycleEnd > 0 && time > cycleEnd) {
-      futuras.push(t);
-    } else {
-      aberta.push(t);
+    if (!invoices[cycleKey]) {
+      invoices[cycleKey] = {
+        key: cycleKey,
+        time: timeValue,
+        txs: [],
+        total: 0
+      };
+    }
+
+    invoices[cycleKey].txs.push(t);
+    
+    let amt = t.amount;
+    if (typeof amt === 'string') {
+        amt = parseFloat(amt.replace(',', '.').replace(/[^0-9.-]/g, ''));
+    }
+    amt = Number(amt) || 0;
+    
+    // Identificar se a receita é um pagamento de fatura (para não subtrair do total de compras do mês)
+    const descLower = (t.description || t.name || '').toLowerCase();
+    const isPayment = t.type === 'receita' && (descLower.includes('pagamento') || descLower.includes('fatura') || descLower.includes('recebido'));
+    
+    if (!isPayment) {
+        // IMPORTANTE: Se não for estritamente 'receita', soma como despesa. 
+        // Transações mal formadas ou antigas podem não ter t.type == 'despesa'
+        const amountToSum = t.type === 'receita' ? -amt : amt;
+        invoices[cycleKey].total += amountToSum;
     }
   });
 
-  // Ordenar por data
-  const sortByDate = (a, b) => {
-    const da = a.date?.toDate ? a.date.toDate() : new Date(a.date);
-    const db = b.date?.toDate ? b.date.toDate() : new Date(b.date);
-    return da.getTime() - db.getTime();
-  };
-  fechada.sort(sortByDate);
-  aberta.sort(sortByDate);
-  futuras.sort(sortByDate);
+  const baseCurrentCycle = new Date(currentMonthDate.getFullYear(), currentMonthDate.getMonth(), closingDay);
+  if (currentDay >= closingDay) baseCurrentCycle.setMonth(baseCurrentCycle.getMonth() + 1);
+  const currentCycleTime = baseCurrentCycle.getTime();
+  const currentCycleKey = getCycleKey(baseCurrentCycle);
+  if (!invoices[currentCycleKey]) {
+     invoices[currentCycleKey] = {
+        key: currentCycleKey,
+        time: currentCycleTime,
+        txs: [],
+        total: 0
+     };
+  }
 
-  const renderTxList = (list) => {
-    if (list.length === 0) return '<p style="font-size:0.85rem; color:var(--text-secondary); padding:10px 0;">Nenhuma transação.</p>';
-    return list.map(t => {
-      const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-      const instInfo = t.installmentInfo ? ` <span style="font-size:0.7rem; color:var(--text-secondary);">(${t.installmentInfo.current}/${t.installmentInfo.total})</span>` : '';
-      return `
-        <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--border-color);">
-          <div style="flex:1;">
-            <div style="font-weight:600; font-size:0.9rem;">${t.description || t.name || 'Sem Descrição'}${instInfo}</div>
-            <div style="font-size:0.75rem; color:var(--text-secondary);">${d.toLocaleDateString('pt-BR')}</div>
-          </div>
-          <div style="font-weight:bold; color:var(--expense-color);">
-            ${formatCurrency(t.amount)}
-          </div>
-        </div>
-      `;
-    }).join('');
-  };
+  // --- INJECT PREVIOUS UNPAID DEBT INTO CURRENT CYCLE ---
+  // Apenas a dívida passada (closedDebt) ainda não paga rola para a fatura atual
+  const unpaidPast = Math.abs(acc._closedDebt || 0);
+  if (unpaidPast > 0.01) {
+      invoices[currentCycleKey].txs.push({
+          id: 'unpaid_rollover_dummy',
+          description: 'Saldo da fatura anterior',
+          amount: unpaidPast,
+          type: 'despesa',
+          date: baseCurrentCycle,
+          isPaid: false
+      });
+      invoices[currentCycleKey].total += unpaidPast;
+  }
 
-  const sumList = (list) => list.reduce((s, t) => s + Math.abs(t.amount), 0);
+  let invoiceList = Object.values(invoices).sort((a, b) => a.time - b.time);
+  
+  const maxTotal = Math.max(...invoiceList.map(i => Math.abs(i.total)), 1);
+  let selectedIdx = invoiceList.findIndex(i => i.key === currentCycleKey);
+  if (selectedIdx === -1) selectedIdx = invoiceList.length - 1;
 
-  // Injetar ou atualizar DIV no DOM
   let modal = document.getElementById('invoice-modal');
   if (!modal) {
     modal = document.createElement('div');
     modal.id = 'invoice-modal';
     modal.className = 'modal-container hidden';
-    // Fechar ao clicar fora
+    
+    // Create the static skeleton
+    modal.innerHTML = `
+      <style>
+        #invoice-bars-container::-webkit-scrollbar { display: none; }
+        #invoice-bars-container { -ms-overflow-style: none; scrollbar-width: none; }
+      </style>
+      <div class="modal-content" style="max-width: 500px; width:100%; height: 95vh; display:flex; flex-direction:column; padding:0; overflow:hidden; border-radius:16px;">
+        <div style="padding: 24px 24px 16px;">
+           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
+             <h3 style="margin:0; font-size:1.1rem; font-weight:600; display:flex; align-items:center; gap:16px;">
+               <button onclick="closeModal('invoice-modal')" style="background:none; border:none; font-size:1.2rem; cursor:pointer; color:var(--text-primary); padding:0;"><i class="fas fa-chevron-left"></i></button>
+               Fatura
+             </h3>
+           </div>
+           
+           <div style="margin-bottom:8px;">
+              <span id="invoice-status-label" style="font-size:1.0rem; font-weight:700;"></span>
+           </div>
+           
+           <div id="invoice-total" style="font-size:2.4rem; font-weight:900; color:var(--text-primary); margin-bottom:12px; letter-spacing:-0.5px;">
+           </div>
+           
+           <div style="font-size:0.85rem; color:var(--text-secondary); line-height:1.6; font-weight:500;">
+              <div>Vencimento • <span id="invoice-dueDate"></span></div>
+              <div>Fechamento • <span id="invoice-closeDate"></span></div>
+           </div>
+        </div>
+        
+        <div id="invoice-bars-container" style="display:flex; gap:6px; padding:10px 16px 0 16px; overflow-x:auto; border-bottom: 1px solid rgba(128,128,128,0.15); scroll-snap-type: x mandatory; scroll-behavior: smooth;">
+        </div>
+
+        <div style="flex:1; overflow-y:auto; padding:0 24px 24px;">
+          <div id="invoice-tx-list" style="margin-top:20px;">
+          </div>
+        </div>
+      </div>
+    `;
+
     modal.addEventListener('click', (e) => {
       if (e.target === modal) closeModal('invoice-modal');
     });
     document.body.appendChild(modal);
   }
 
-  modal.innerHTML = `
-    <div class="modal-content" style="max-width: 600px; max-height: 90vh; display:flex; flex-direction:column;">
-      <button class="modal-close-btn" onclick="closeModal('invoice-modal')">&times;</button>
-      <h3 style="margin-bottom:16px;"><i class="fas fa-list-alt"></i> Detalhes da Fatura: ${acc.name}</h3>
-      
-      <div style="flex:1; overflow-y:auto; padding-right:8px;">
-        <!-- Fatura Fechada / Atrasada -->
-        <div style="margin-bottom:24px;">
-          <h4 style="border-bottom:2px solid var(--expense-color); padding-bottom:8px; display:flex; justify-content:space-between; align-items:flex-end;">
-            <span><i class="fas fa-file-invoice" style="color:var(--expense-color);"></i> Fechada / Atrasada</span>
-            <span style="color:var(--expense-color); font-size:1.1rem;">${formatCurrency(sumList(fechada))}</span>
-          </h4>
-          ${renderTxList(fechada)}
-        </div>
+  window._selectInvoiceCycle = function(idx) {
+    selectedIdx = idx;
+    _renderInvoiceModalContent(false);
+  };
 
-        <!-- Fatura Aberta -->
-        <div style="margin-bottom:24px;">
-          <h4 style="border-bottom:2px solid var(--warning-color); padding-bottom:8px; display:flex; justify-content:space-between; align-items:flex-end;">
-            <span><i class="fas fa-sync-alt" style="color:var(--warning-color);"></i> Aberta (Atual)</span>
-            <span style="color:var(--warning-color); font-size:1.1rem;">${formatCurrency(sumList(aberta))}</span>
-          </h4>
-          ${renderTxList(aberta)}
-        </div>
+  window._renderInvoiceModalContent = function(isInitialLoad = true) {
+    const inv = invoiceList[selectedIdx];
+    
+    // Sort transactions by date (newest first)
+    inv.txs.sort((a, b) => {
+      const da = a.date?.toDate ? a.date.toDate() : new Date(a.date);
+      const db = b.date?.toDate ? b.date.toDate() : new Date(b.date);
+      return db.getTime() - da.getTime();
+    });
 
-        <!-- Faturas Futuras -->
-        <div style="margin-bottom:16px;">
-          <h4 style="border-bottom:2px solid var(--text-secondary); padding-bottom:8px; display:flex; justify-content:space-between; align-items:flex-end;">
-            <span><i class="fas fa-calendar-alt" style="color:var(--text-secondary);"></i> Faturas Futuras (Parcelas)</span>
-            <span style="color:var(--text-primary); font-size:1.1rem;">${formatCurrency(sumList(futuras))}</span>
-          </h4>
-          ${renderTxList(futuras)}
-        </div>
-      </div>
-    </div>
-  `;
+    const isCurrent = inv.time === currentCycleTime;
+    const isPast = inv.time < currentCycleTime;
+    
+    // Verificar se a fatura passada está inteiramente paga
+    const unpaidTxs = inv.txs.filter(t => !t.isPaid && t.id !== 'initial_balance_dummy');
+    const isPaid = isPast && unpaidTxs.length === 0 && inv.txs.length > 0;
+    
+    let statusLabel = isCurrent ? 'Fatura atual' : (isPast ? (isPaid ? 'Fatura paga' : 'Fatura fechada') : 'Fatura futura');
+    let colorClass = isCurrent ? 'var(--info-color, #00A3FF)' : (isPast ? (isPaid ? 'var(--income-color, #00C853)' : 'var(--danger-color, #FF3B30)') : 'var(--warning-color)');
 
-  // Adicionar atalho de teclado ESC se não tiver globalmente
+    const invDate = new Date(inv.time); 
+    const fechamentoStr = `${acc.closingDay} de ${formatExtMonth(invDate)}`;
+
+    let dueDate = new Date(inv.time); 
+    dueDate.setDate(acc.dueDay || acc.closingDay);
+    if ((acc.dueDay || acc.closingDay) < acc.closingDay) {
+        dueDate.setMonth(dueDate.getMonth() + 1);
+    }
+    const vencimentoStr = `${acc.dueDay || acc.closingDay} de ${formatExtMonth(dueDate)}`;
+
+    const txHTML = inv.txs.length === 0 ? '<p style="text-align:center; margin-top:30px; color:var(--text-secondary);">Nenhuma transação nesta fatura.</p>' : 
+      inv.txs.map(t => {
+        const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+        const instInfo = t.installmentInfo ? ` <span style="font-size:0.75rem; color:var(--text-secondary);">(${t.installmentInfo.current}/${t.installmentInfo.total})</span>` : '';
+        const dayStr = String(d.getDate()).padStart(2, '0');
+        const monthStr = d.toLocaleString('pt-BR', { month: 'short' }).toUpperCase().replace('.', '');
+        
+        return `
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:16px 0; border-bottom:1px solid rgba(128,128,128,0.15);">
+            <div style="display:flex; gap:16px; align-items:center;">
+              <div style="font-size:0.75rem; color:var(--text-secondary); width:40px; text-align:left; line-height:1.3; font-weight:600;">
+                <span style="font-size:0.9rem; font-weight:bold; color:var(--text-primary);">${dayStr}</span><br/>${monthStr}
+              </div>
+              <div style="font-weight:600; font-size:1rem; color:var(--text-primary);">
+                ${t.description || t.name || 'Sem Descrição'}${instInfo}
+              </div>
+            </div>
+            <div style="font-weight:600; font-size:1rem; color:${t.type === 'receita' ? 'var(--income-color)' : 'var(--text-primary)'};">
+              ${t.type === 'receita' ? '' : ''}${formatCurrency(t.amount)}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+    const elStatusLabel = document.getElementById('invoice-status-label');
+    const elTotal = document.getElementById('invoice-total');
+    const elDueDate = document.getElementById('invoice-dueDate');
+    const elCloseDate = document.getElementById('invoice-closeDate');
+    const elBars = document.getElementById('invoice-bars-container');
+    const elTxList = document.getElementById('invoice-tx-list');
+    
+    if (elStatusLabel) {
+      elStatusLabel.textContent = statusLabel;
+      elStatusLabel.style.color = colorClass;
+    }
+    if (elTotal) elTotal.textContent = formatCurrency(inv.total);
+    if (elDueDate) elDueDate.textContent = vencimentoStr;
+    if (elCloseDate) elCloseDate.textContent = fechamentoStr;
+    
+    // Only build DOM fully if initial load or empty, otherwise just update visual state
+    if (elBars && (isInitialLoad || elBars.children.length === 0)) {
+        const barsHTML = invoiceList.map((item, idx) => {
+          const heightPct = Math.max((Math.abs(item.total) / maxTotal) * 100, 2); 
+          const isSel = idx === selectedIdx;
+          const isCurrentCycle = item.time === currentCycleTime;
+          const opacity = isSel ? '1' : '0.4';
+          const weight = isSel ? '800' : '600';
+          const textColor = isSel ? 'var(--text-primary)' : 'var(--text-secondary)';
+          
+          return `
+            <div onclick="_selectInvoiceCycle(${idx})" style="flex-shrink:0; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; gap:8px; cursor:pointer; min-width:64px; scroll-snap-align: center;">
+              <div style="height: 100px; width: 100%; display:flex; align-items:flex-end; justify-content:center;">
+                 <div class="inv-bar" style="height: ${heightPct}%; width: 44px; background-color: var(--primary-500); opacity: ${opacity}; border-radius: 6px 6px 0 0; transition: height 0.3s, opacity 0.3s;"></div>
+              </div>
+              <div class="inv-label" style="font-size:0.75rem; font-weight:${weight}; color:${textColor}; padding-bottom: 8px; text-align:center; min-height: 28px; line-height: 1.2; transition: color 0.3s;">
+                ${item.key}
+                ${isCurrentCycle ? '<br><span style="font-size:0.6rem; font-weight:700; color:var(--primary-color);">atual</span>' : ''}
+              </div>
+            </div>
+          `;
+        }).join('');
+        elBars.innerHTML = barsHTML;
+    } else if (elBars) {
+        // Just update existing bars visually to avoid DOM thrashing and blinking
+        Array.from(elBars.children).forEach((child, idx) => {
+            const isSel = idx === selectedIdx;
+            const bar = child.querySelector('.inv-bar');
+            const label = child.querySelector('.inv-label');
+            if (bar) bar.style.opacity = isSel ? '1' : '0.4';
+            if (label) {
+                label.style.fontWeight = isSel ? '800' : '600';
+                label.style.color = isSel ? 'var(--text-primary)' : 'var(--text-secondary)';
+            }
+        });
+    }
+
+    if (elTxList) elTxList.innerHTML = txHTML;
+
+    setTimeout(() => {
+       const container = document.getElementById('invoice-bars-container');
+       if (container && container.children[selectedIdx]) {
+          const selectedEl = container.children[selectedIdx];
+          const scrollPos = selectedEl.offsetLeft - (container.clientWidth / 2) + (selectedEl.clientWidth / 2);
+          container.scrollTo({ left: scrollPos, behavior: isInitialLoad ? 'auto' : 'smooth' });
+       }
+    }, 50);
+  };
+
   const escHandler = (e) => {
     if (e.key === 'Escape') {
       closeModal('invoice-modal');
@@ -3827,6 +4126,7 @@ window.showInvoiceModal = function(accountId) {
   };
   document.addEventListener('keydown', escHandler);
 
+  _renderInvoiceModalContent();
   openModal('invoice-modal');
 };
 
@@ -3860,6 +4160,50 @@ function getAuthError(code) {
 }
 
 // ============================
+// PWA Installation Setup
+// ============================
+let deferredPrompt;
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  // Prevent the mini-infobar from appearing on mobile
+  e.preventDefault();
+  // Stash the event so it can be triggered later.
+  deferredPrompt = e;
+  // Update UI to notify the user they can install the PWA
+  const installCard = document.getElementById('pwa-install-card');
+  if (installCard) {
+    installCard.style.display = 'block';
+  }
+});
+
+function initPWAInfo() {
+  const installBtn = document.getElementById('install-app-btn');
+  if (installBtn) {
+    installBtn.addEventListener('click', async () => {
+      // Hide the UI
+      const installCard = document.getElementById('pwa-install-card');
+      if (installCard) installCard.style.display = 'none';
+      if (!deferredPrompt) return;
+      // Show the install prompt
+      deferredPrompt.prompt();
+      // Wait for the user to respond to the prompt
+      const { outcome } = await deferredPrompt.userChoice;
+      console.log(`User response to the install prompt: ${outcome}`);
+      deferredPrompt = null;
+    });
+  }
+
+  // Registra Service Worker
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').then(reg => {
+      console.log('SW Registrado:', reg.scope);
+    }).catch(err => {
+      console.log('SW Falha no registro:', err);
+    });
+  }
+}
+
+// ============================
 // Init
 // ============================
 
@@ -3880,6 +4224,7 @@ function init() {
 
   initNavigation();
   initAuth();
+  initPWAInfo();
 }
 
 document.addEventListener('DOMContentLoaded', init);

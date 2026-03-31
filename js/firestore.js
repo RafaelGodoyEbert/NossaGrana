@@ -334,48 +334,85 @@ export function calculateBalances(accounts, transactions) {
         currentCycleEnd = new Date(now.getFullYear(), now.getMonth(), closingDay);
       }
       prevCycleStart.setHours(0, 0, 0, 0);
-      prevCycleEnd.setHours(23, 59, 59, 999);
+      prevCycleEnd.setHours(0, 0, 0, 0);
       currentCycleStart.setHours(0, 0, 0, 0);
-      currentCycleEnd.setHours(23, 59, 59, 999);
+      currentCycleEnd.setHours(0, 0, 0, 0);
 
-      let debtTotal = (acc.initialBalance || 0) + (acc.initialAdjustment || 0);
+      let initialVal = (acc.initialBalance || 0) + (acc.initialAdjustment || 0);
+      let debtTotal = initialVal;
       
-      // Fatura Atual = soma das transações no ciclo ANTERIOR (fatura fechada)
-      // Calculada SEM considerar isPaid e SEM incluir operações de fatura,
-      // para sempre bater com o que o banco mostra.
-      let invoiceBalance = 0;
-      
-      // Fatura Aberta = soma das transações no ciclo ATUAL (acumulando)
-      let openCycleBalance = 0;
+      let purchasesClosed = initialVal < 0 ? Math.abs(initialVal) : 0;
+      let totalPayments = initialVal > 0 ? initialVal : 0;
+      let purchasesOpen = 0;
+      let purchasesFuture = 0;
 
       accTxs.forEach(t => {
-        const txDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-        const amount = t.type === 'receita' ? -t.amount : t.amount;
-        const isInvoiceOp = t.invoicePayment;
-        
-        // Dívida Total: tudo não pago (para cálculo de limite disponível)
+        // Restaurado: Respeitando a flag isPaid para a conta cartão de crédito fechar corretamente
+        // sem exigir que o usuário crie transações de receita manualmente.
         if (!t.isPaid) {
-          debtTotal -= amount;
-
-          // Se for antes do ciclo atual (faturas fechadas e/ou atrasadas)
-          if (txDate < currentCycleStart) {
-            invoiceBalance -= amount;
+          const txDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+          const amount = t.amount;
+          
+          if (t.type === 'receita') {
+            totalPayments += amount;
+            debtTotal += amount;
+          } else {
+            debtTotal -= amount;
+            
+            if (txDate >= currentCycleEnd) {
+               purchasesFuture += amount;
+            } else if (txDate >= currentCycleStart && txDate < currentCycleEnd) {
+               purchasesOpen += amount;
+            } else {
+               purchasesClosed += amount;
+            }
           }
-          // Se for no ciclo atual (fatura acumulando / aberta)
-          else if (txDate >= currentCycleStart && txDate < currentCycleEnd) {
-            openCycleBalance -= amount;
-          }
-          // Se for >= currentCycleEnd, vai cair na diferença (futureDebt)
         }
       });
       
-      // Ajustes manuais/Saldo Inicial não têm data, então devem se refletir na fatura ATUAL (Aberta).
-      // Subtrair valor negativo soma ao balde positivo.
-      openCycleBalance -= ((acc.initialBalance || 0) + (acc.initialAdjustment || 0));
+      // Cascata de pagamentos: do mais antigo para o mais novo
+      let closedDebt = purchasesClosed;
+      let openDebt = purchasesOpen;
+      let futureDebt = purchasesFuture;
+
+      if (totalPayments > 0) {
+        if (totalPayments >= closedDebt) {
+          totalPayments -= closedDebt;
+          closedDebt = 0;
+        } else {
+          closedDebt -= totalPayments;
+          totalPayments = 0;
+        }
+      }
+
+      if (totalPayments > 0) {
+        if (totalPayments >= openDebt) {
+          totalPayments -= openDebt;
+          openDebt = 0;
+        } else {
+          openDebt -= totalPayments;
+          totalPayments = 0;
+        }
+      }
       
+      if (totalPayments > 0) {
+        if (totalPayments >= futureDebt) {
+          totalPayments -= futureDebt;
+          futureDebt = 0;
+        } else {
+          futureDebt -= totalPayments;
+          totalPayments = 0;
+        }
+      }
+
       acc.currentBalance = debtTotal;
-      acc.currentInvoice = invoiceBalance;
-      acc.openCycleInvoice = openCycleBalance;
+      // Para o Nubank, a Fatura Atual engloba a fechada não paga e a acumulando
+      acc.currentInvoice = -(closedDebt + openDebt);
+      
+      // Armazenando para o Modal
+      acc._closedDebt = -closedDebt;
+      acc._openDebt = -openDebt;
+      acc._futureDebt = -futureDebt;
       // Guardar limites dos ciclos para uso na UI e liquidação
       acc._prevCycleStart = prevCycleStart;
       acc._prevCycleEnd = prevCycleEnd;

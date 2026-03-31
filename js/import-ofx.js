@@ -564,15 +564,22 @@ function parseOFX(text) {
         }
       }
 
+      // --- Detecção de Operação de Fatura ---
+      const descLower = cleanDesc.toLowerCase();
+      const isParcelamentoCredit = descLower.includes('parcelamento de fatura') && !descLower.match(/\d+\/\d+$/) && rawVal > 0;
+      const isPagamentoRecebido = descLower.includes('pagamento recebido') && rawVal > 0;
+      const isInvoicePayment = pm === 'credito' && (isParcelamentoCredit || isPagamentoRecebido);
+
       txs.push({
         fitid: fitid,
         date,
         description: cleanDesc,
         amount: Math.abs(rawVal),
         type: rawVal > 0 ? 'receita' : 'despesa',
-        category: suggestCategory(cleanDesc),
+        category: (isInvoicePayment) ? 'Pagamento de Fatura' : suggestCategory(cleanDesc),
         original: `OFX: ${memo || name || ''}`,
-        paymentMethod: pm
+        paymentMethod: pm,
+        ...(isInvoicePayment ? { invoicePayment: true } : {})
       });
     } catch (e) { continue; }
   }

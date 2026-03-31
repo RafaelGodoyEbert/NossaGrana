@@ -162,6 +162,23 @@
     grid-template-columns: 1fr;
   }
 
+  /* Ajuste para Categorias não quebrarem e se auto-espremerem */
+  .category-item {
+    flex-wrap: wrap;
+  }
+  .category-item .cat-info {
+    flex: 1;
+    min-width: 120px; /* Garante espaço mínimo para nome da cat e info */
+  }
+  .category-item .cat-amount {
+    margin-left: auto;
+  }
+  .category-item .cat-bar-wrapper {
+    flex: 0 0 100%;
+    max-width: 100%;
+    margin-top: var(--space-sm);
+  }
+
   table {
     font-size: 0.8rem;
   }

@@ -365,6 +365,68 @@ window.payCurrentInvoice = async function(accountId) {
   }
 };
 
+window.paySpecificInvoice = async function(accountId, cycleKey) {
+  const acc = state.accounts.find(a => a.id === accountId);
+  if (!acc || acc.type !== 'cartao_credito') return;
+  if (!db) { showToast('Modo Demo', 'Não disponível no modo demo.', 'warning'); return; }
+
+  const closingDay = acc.closingDay || 1;
+  const getCycleKey = (date) => {
+    const m = date.toLocaleString('pt-BR', { month: 'short' }).toUpperCase().replace('.', '');
+    const y = date.getFullYear().toString().slice(2);
+    return `${m} ${y}`;
+  };
+
+  const txsInCycle = state.transactions.filter(t => {
+    if (t.accountId !== accountId || t.isPaid) return false;
+    const txDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+    let cycleMonthDate = new Date(txDate.getFullYear(), txDate.getMonth(), closingDay);
+    if (txDate.getDate() >= closingDay) {
+        cycleMonthDate.setMonth(cycleMonthDate.getMonth() + 1);
+    }
+    return getCycleKey(cycleMonthDate) === cycleKey;
+  });
+
+  if (txsInCycle.length === 0) {
+    showToast('Sem pendências', 'Não há transações pendentes nesta fatura.', 'info');
+    return;
+  }
+
+  const total = txsInCycle.reduce((s, t) => {
+    let amt = Number(t.amount) || 0;
+    const descLower = (t.description || t.name || '').toLowerCase();
+    const isPayment = t.type === 'receita' && (descLower.includes('pagamento') || descLower.includes('fatura') || descLower.includes('recebido'));
+    if (isPayment) return s; 
+    return s + (t.type === 'receita' ? -amt : amt);
+  }, 0);
+
+  if (!confirm(`💳 Pagar a fatura do cartão "${acc.name}" correspondente a ${cycleKey}?\n\n${txsInCycle.length} transação(ões) pendentes.\nTotal a liquidar: ${formatCurrency(Math.abs(total))}\n\nIsso marcará todas essas compras como PAGAS.`)) return;
+
+  try {
+    for (let i = 0; i < txsInCycle.length; i += 500) {
+      const chunk = txsInCycle.slice(i, i + 500);
+      const batch = db.batch();
+      chunk.forEach(t => {
+        batch.update(db.collection('transactions').doc(t.id), { isPaid: true });
+      });
+      await batch.commit();
+    }
+
+    showToast('Fatura Paga! ✅', `${txsInCycle.length} transações liquidadas — ${formatCurrency(Math.abs(total))}`, 'success');
+    
+    // Fecha o modal caso esteja aberto dessa fatura específica
+    const modal = document.getElementById('invoice-modal');
+    if (modal && !modal.classList.contains('hidden')) {
+        closeModal('invoice-modal');
+    }
+    
+    await loadAllData();
+  } catch (err) {
+    console.error('Erro ao pagar fatura isolada:', err);
+    showToast('Erro', 'Não foi possível marcar a fatura como paga.', 'error');
+  }
+};
+
 // ============================
 // Chat Transaction Handler
 // ============================
@@ -466,8 +528,32 @@ async function handleImportedTransactions(importedTxs, accountId, userId) {
     }
   }
 
+  const normalizeDesc = (desc) => {
+    if (!desc) return '';
+    return desc.toLowerCase()
+               .replace(/ - parcela \d+\/\d+$/i, '')
+               .replace(/ - \d+\/\d+$/i, '')
+               .replace(/^cartão - /, '')
+               .replace(/^nupay - /, '')
+               .replace(/parcela \d+\/\d+/i, '')
+               .replace(/\s+/g, '')
+               .trim();
+  };
+
+  const existingInsts = [];
+  state.transactions.forEach(ex => {
+    if (ex.description && (ex.description.includes('/') || ex.installmentInfo)) {
+      const normBase = normalizeDesc(ex.description);
+      const amountCents = Math.round(ex.amount * 100);
+      const instMatch = ex.description.match(/(\d+\/\d+)$/);
+      const instCount = instMatch ? instMatch[1] : (ex.installmentInfo ? `${ex.installmentInfo.current}/${ex.installmentInfo.total}` : '1/1');
+      const cleanInstCount = instCount.replace(/^0+/, '').replace(/\/0+/, '/'); 
+      existingInsts.push({ normBase, amountCents, cleanInstCount });
+    }
+  });
+
   // Build data array
-  const txDataArray = importedTxs.map(tx => {
+  const txDataArray = importedTxs.reduce((acc, tx) => {
     const dateObj = tx.date instanceof Date ? tx.date : new Date(tx.date);
 
     let finalAccountId = accountId || state.accounts[0]?.id || '';
@@ -515,9 +601,72 @@ async function handleImportedTransactions(importedTxs, accountId, userId) {
     if (tx.updateTargetId) {
       resultTx.id = tx.updateTargetId;
     }
+    
+    if (tx.installmentInfo) {
+      resultTx.installmentInfo = tx.installmentInfo;
+    }
 
-    return resultTx;
-  });
+    acc.push(resultTx);
+
+    // Auto-generate future installments for credit card purchases
+    if (tx.installmentInfo && tx.paymentMethod === 'credito') {
+      const current = tx.installmentInfo.current;
+      const total = tx.installmentInfo.total;
+      
+      for (let i = current + 1; i <= total; i++) {
+        const instCountStr = `${i}/${total}`;
+        const cleanInstCountStr = instCountStr.replace(/^0+/, '').replace(/\/0+/, '/'); 
+        const normBase = normalizeDesc(tx.description);
+        const amountCents = Math.round(tx.amount * 100);
+        const isMatch = (dbItem) => {
+           if (dbItem.cleanInstCount !== cleanInstCountStr) return false;
+           if (Math.abs(dbItem.amountCents - amountCents) > 5) return false;
+           return dbItem.normBase.includes(normBase) || normBase.includes(dbItem.normBase);
+        };
+
+        if (!existingInsts.some(isMatch)) {
+          existingInsts.push({ normBase, amountCents, cleanInstCount: cleanInstCountStr });
+          
+          const futureDate = new Date(dateObj);
+          futureDate.setMonth(futureDate.getMonth() + (i - current));
+          
+          let baseTitle = tx.description;
+          if (tx.installmentInfo.baseTitle) {
+             baseTitle = tx.installmentInfo.baseTitle;
+          } else {
+             const instMatch = tx.description.match(/ - Parcela \d+\/\d+$/i) || 
+                               tx.description.match(/ - \d+\/\d+$/i) || 
+                               tx.description.match(/ Parcela \d+\/\d+$/i) || 
+                               tx.description.match(/ \d+\/\d+$/i);
+             if (instMatch) {
+               baseTitle = tx.description.substring(0, tx.description.length - instMatch[0].length).trim();
+             }
+          }
+          
+          const futureDesc = `${baseTitle} - ${i}/${total}`;
+          
+          acc.push({
+            familyId: state.familyId,
+            createdBy: selectedUserId,
+            createdByName: selectedUserName,
+            type: 'despesa', // installments are always despesa
+            amount: tx.amount,
+            category: tx.category || 'Importado',
+            description: futureDesc,
+            accountId: finalAccountId,
+            date: db ? firebase.firestore.Timestamp.fromDate(futureDate) : { seconds: Math.floor(futureDate.getTime() / 1000), toDate: () => futureDate },
+            isPaid: false,
+            source: 'import',
+            paymentMethod: 'credito',
+            invoicePayment: false,
+            installmentInfo: { current: i, total: total, originalAmount: tx.amount * total, baseTitle }
+          });
+        }
+      }
+    }
+
+    return acc;
+  }, []);
 
   // Show progress overlay
   const overlay = document.createElement('div');
@@ -760,6 +909,7 @@ function renderMainChart(txs) {
 
   for (let i = 5; i >= 0; i--) {
     const d = new Date();
+    d.setDate(1); // Set to 1st to avoid wrapping months on 31st
     d.setMonth(d.getMonth() - i);
     const label = d.toLocaleDateString('pt-BR', { month: 'short' });
     const start = new Date(d.getFullYear(), d.getMonth(), 1);
@@ -1360,7 +1510,7 @@ function renderAccounts() {
         statsHtml = `
               <div class="acc-stats" style="flex-direction:column;align-items:stretch;background:transparent;padding:0;">
                 <div style="display:flex;justify-content:space-between;font-size:0.85rem;margin-bottom:8px;">
-                  <span style="color:var(--text-secondary);">Disponível: <strong style="color:var(--success-color);font-size:1rem;">${formatCurrency(available)}</strong></span>
+                  <span style="color:var(--text-secondary);">Disponível: <strong style="color:var(--income-color);font-size:1rem;">${formatCurrency(available)}</strong></span>
                   <span style="color:var(--text-secondary);font-size:0.75rem;">Limite: ${formatCurrency(limit)}</span>
                 </div>
                 <div class="progress-bar" style="background:var(--bg-tertiary); height:8px; border-radius:4px; margin:0;">
@@ -1371,11 +1521,11 @@ function renderAccounts() {
                   ${Math.abs(openCycle) > 0.01 ? `<span>🔄 Atual/Aberta (${currStartStr} — ${currEndStr}): <strong style="color:var(--warning-color);">${formatCurrency(Math.abs(openCycle))}</strong></span>` : ''}
                   ${Math.abs(futureDebt) > 0.01 ? `<span>📅 Futuras: <strong style="color:var(--text-secondary);">${formatCurrency(Math.abs(futureDebt))}</strong></span>` : ''}
                 </div>
-                <div style="margin-top:10px; display:flex; justify-content:flex-end; gap:6px;">
+                <div style="margin-top:10px; display:flex; justify-content:flex-end; gap:6px; flex-wrap:wrap;">
                   <button class="btn btn-sm btn-primary" onclick="showInvoiceModal('${acc.id}')" title="Ver Detalhes da Fatura" style="font-size:0.65rem; padding:4px 8px; border:none; border-radius:6px; cursor:pointer;">
                     <i class="fas fa-list-alt"></i> Ver Faturas
                   </button>
-                  <button class="btn btn-sm" onclick="payCurrentInvoice('${acc.id}')" title="Marcar fatura fechada como paga" style="font-size:0.65rem; padding:4px 10px; background:var(--success-color); color:#fff; border:none; border-radius:6px; cursor:pointer;">
+                  <button class="btn btn-sm" onclick="payCurrentInvoice('${acc.id}')" title="Marcar fatura fechada como paga" style="font-size:0.65rem; padding:4px 10px; background:var(--income-color); color:#fff; border:none; border-radius:6px; cursor:pointer;">
                     <i class="fas fa-check-circle"></i> Pagar Fatura
                   </button>
                   <button class="btn btn-sm btn-secondary" onclick="cleanCreditCardDuplicates('${acc.id}')" title="Limpar duplicatas" style="font-size:0.65rem; padding:4px 8px;">
@@ -1402,7 +1552,7 @@ function renderAccounts() {
                 ${acc.type === 'cartao_credito' && acc.closingDay ? `<span class="badge" style="font-size:0.6rem;background:var(--bg-tertiary);margin-left:8px;">Fecha dia ${acc.closingDay}</span>` : ''}
                 ${acc.initialAdjustment ? `<i class="fas fa-magic" title="Possui ajuste manual de ${formatCurrency(acc.initialAdjustment)}" style="font-size:0.7rem;margin-left:4px;color:var(--primary-color);"></i>` : ''}
               </div>
-              <div style="display:flex;align-items:center;gap:var(--space-sm);">
+              <div class="acc-actions-area">
                 <span class="acc-balance ${balance >= 0 ? 'text-income' : 'text-expense'}">${formatCurrency(balance)}</span>
                 <div class="account-card-actions">
                   <button class="btn-icon" onclick="editAccount('${acc.id}')" title="Editar"><i class="fas fa-pencil-alt"></i></button>
@@ -1562,7 +1712,7 @@ window.cleanCreditCardDuplicates = async function(accountId) {
             <div style="flex:1;">
               <div style="font-weight:500;font-size:0.95rem;">${t.description || t.category}</div>
               <div style="font-size:0.8rem;color:var(--text-secondary);">
-                ${d.toLocaleDateString('pt-BR')} • ${t.category} ${t.fitid ? ' <span style="color:var(--success-color);font-size:0.75rem;margin-left:6px;"><i class="fas fa-link"></i> Importado (OFX)</span>' : ''}
+                ${d.toLocaleDateString('pt-BR')} • ${t.category} ${t.fitid ? ' <span style="color:var(--income-color);font-size:0.75rem;margin-left:6px;"><i class="fas fa-link"></i> Importado (OFX)</span>' : ''}
               </div>
             </div>
           </label>
@@ -1791,7 +1941,20 @@ function renderPayables() {
   const next7 = [];
   const next30 = [];
 
+  const creditCardInvoices = [];
+  
+  const getCycleKey = (date) => {
+    const m = date.toLocaleString('pt-BR', { month: 'short' }).toUpperCase().replace('.', '');
+    const y = date.getFullYear().toString().slice(2);
+    return `${m} ${y}`;
+  };
+
   pending.forEach(t => {
+    const acc = state.accounts.find(a => a.id === t.accountId);
+    if (acc && acc.type === 'cartao_credito') {
+      return; // Ignora transações individuais de cartão
+    }
+
     let d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
     d.setHours(0, 0, 0, 0);
     const tTime = d.getTime();
@@ -1800,6 +1963,42 @@ function renderPayables() {
     else if (tTime === todayTime) today.push(t);
     else if (tTime <= next7Time) next7.push(t);
     else if (tTime <= next30Time) next30.push(t);
+  });
+
+  // Criar faturas a partir dos cálculos de saldo das contas
+  state.accounts.filter(a => a.type === 'cartao_credito').forEach(acc => {
+    const createVirtualInvoice = (debt, cycleEnd, isClosed) => {
+      if (Math.abs(debt) < 0.01) return;
+      
+      const cycleKey = getCycleKey(cycleEnd);
+      let dueDate = new Date(cycleEnd.getTime());
+      dueDate.setDate(acc.dueDay || acc.closingDay);
+      if ((acc.dueDay || acc.closingDay) < acc.closingDay) {
+          dueDate.setMonth(dueDate.getMonth() + 1);
+      }
+      dueDate.setHours(0, 0, 0, 0);
+
+      const inv = {
+        _isCreditCardInvoice: true,
+        accountId: acc.id,
+        cycleKey: cycleKey,
+        description: `Fatura ${acc.name} (${cycleKey})` + (isClosed ? ' - Fechada' : ''),
+        category: acc.name,
+        dueDate: dueDate,
+        amount: Math.abs(debt),
+        type: 'despesa',
+        txCount: 'Várias'
+      };
+      
+      const tTime = dueDate.getTime();
+      if (tTime < todayTime) overdue.push(inv);
+      else if (tTime === todayTime) today.push(inv);
+      else if (tTime <= next7Time) next7.push(inv);
+      else if (tTime <= next30Time) next30.push(inv);
+    };
+
+    if (acc._closedDebt) createVirtualInvoice(acc._closedDebt, acc._prevCycleEnd, true);
+    if (acc._openDebt) createVirtualInvoice(acc._openDebt, acc._currentCycleEnd, false);
   });
 
   // Generate fixed bill reminders for current month
@@ -1817,6 +2016,28 @@ function renderPayables() {
       return;
     }
     container.innerHTML = items.map(t => {
+      if (t._isCreditCardInvoice) {
+        const formattedDate = t.dueDate.toLocaleDateString('pt-BR');
+        return `
+        <div class="payable-item" style="cursor:pointer; transition:transform 0.2s;" onmouseover="this.style.transform='translateX(4px)'" onmouseout="this.style.transform='translateX(0)'" onclick="showInvoiceModal('${t.accountId}', '${t.cycleKey}')">
+          <div class="tx-icon expense"><i class="fas fa-file-invoice-dollar"></i></div>
+          <div class="tx-details" style="flex:1;">
+            <div class="tx-desc" style="font-weight:600; color:var(--text-primary); display:flex; align-items:center;">
+              ${t.description} 
+              <span style="background:var(--primary-700,#7c3aed);color:#fff;padding:2px 6px;border-radius:4px;font-size:0.65rem;font-weight:bold;margin-left:8px;vertical-align:middle;"><i class="fas fa-credit-card" style="margin-right:2px;"></i>CARTÃO</span>
+            </div>
+            <div class="tx-meta" style="font-size:0.75rem; color:var(--text-secondary); margin-top:4px;">
+              <span><i class="fas fa-calendar-alt"></i> Vencimento: ${formattedDate}</span>
+              <span style="margin-left:12px;"><i class="fas fa-receipt"></i> Múltiplas pendências</span>
+            </div>
+          </div>
+          <div class="tx-amount expense" style="font-weight:bold; font-size:1.1rem; padding-right:16px;">- ${formatCurrency(t.amount)}</div>
+          <div class="payable-actions" onclick="event.stopPropagation();" style="display:flex; align-items:center;">
+             <button class="btn-pay" onclick="paySpecificInvoice('${t.accountId}', '${t.cycleKey}')" title="Marcar esta fatura como paga" style="padding:6px 12px; border-radius:8px; font-weight:600; font-size:0.8rem; background: rgba(0, 200, 83, 0.1); color: var(--income-color, #00C853); border: 1px solid rgba(0, 200, 83, 0.2); cursor:pointer;"><i class="fas fa-check-circle" style="margin-right:4px;"></i> Pagar Fatura</button>
+          </div>
+        </div>`;
+      }
+
       const isReminder = t._isFixedBillReminder;
       const typeClass = t.type === 'receita' ? 'income' : 'expense';
       const icon = isReminder ? '<i class="fas fa-calendar-check"></i>' : (t.type === 'receita' ? '<i class="fas fa-arrow-down"></i>' : '<i class="fas fa-arrow-up"></i>');
@@ -1825,11 +2046,6 @@ function renderPayables() {
 
       const category = t.category || 'Outros';
       const fixedBadge = isReminder ? '<span class="fixed-bill-badge"><i class="fas fa-redo"></i> Conta Fixa</span>' : '';
-
-      // Check if this transaction belongs to a credit card account
-      const txAccount = !isReminder ? state.accounts.find(a => a.id === t.accountId) : null;
-      const isCreditCard = txAccount && txAccount.type === 'cartao_credito';
-      const creditBadge = isCreditCard ? `<span style="background:var(--primary-700,#7c3aed);color:#fff;padding:1px 6px;border-radius:4px;font-size:0.65rem;font-weight:bold;margin-left:6px;"><i class="fas fa-credit-card" style="margin-right:2px;"></i>CARTÃO</span>` : '';
 
       const actionButtons = isReminder
         ? `<div class="payable-actions">
@@ -1844,7 +2060,7 @@ function renderPayables() {
         <div class="payable-item">
           <div class="tx-icon ${isReminder ? '' : typeClass}" style="${isReminder ? 'color:var(--primary-600);' : ''}">${icon}</div>
           <div class="tx-details" style="flex:1;">
-            <div class="tx-desc" style="font-weight:600;">${t.description || t.name} ${fixedBadge}${creditBadge}</div>
+            <div class="tx-desc" style="font-weight:600;">${t.description || t.name} ${fixedBadge}</div>
             <div class="tx-meta" style="font-size:0.75rem; color:var(--text-secondary);">
               <span><i class="fas fa-calendar-alt"></i> ${formattedDate}</span>
               <span style="margin-left:8px;"><i class="fas fa-tag"></i> ${category}</span>
@@ -2812,7 +3028,12 @@ function initNavigation() {
     if (!fb) return;
     document.getElementById('tx-description').value = fb.name;
     document.getElementById('tx-category').value = fb.category || 'Moradia';
-    document.getElementById('tx-amount').value = fb.amount;
+    
+    // Apenas sobrescreve o valor se for uma nova transação. Se for edição de um OFX, mantém o valor original (com multas/descontos)
+    const isEdit = !!document.getElementById('tx-id').value;
+    if (!isEdit) {
+      document.getElementById('tx-amount').value = fb.amount;
+    }
     // Set type to despesa
     document.getElementById('tx-type').value = 'despesa';
     document.querySelectorAll('#tx-type-selector .sg-btn').forEach(b => b.classList.remove('active'));
@@ -3002,6 +3223,7 @@ function handleCompoundInterest(e) {
 function openTransactionModal() {
   const form = document.getElementById('transaction-form');
   form.reset();
+  delete form.dataset.fixedBillId;
   document.getElementById('tx-id').value = '';
   document.getElementById('tx-date').value = todayString();
   document.getElementById('tx-type').value = 'despesa';
@@ -3092,9 +3314,14 @@ async function handleTransactionForm(e) {
   }
 
   // Fixed bill link
-  const fixedBillId = document.getElementById('tx-fixed-bill-toggle')?.checked
+  let fixedBillId = document.getElementById('tx-fixed-bill-toggle')?.checked
     ? (document.getElementById('tx-fixed-bill-select')?.value || null)
     : null;
+    
+  // Support for direct fixed bill payments via the Pagar button fallback
+  if (!fixedBillId && document.getElementById('transaction-form').dataset.fixedBillId) {
+    fixedBillId = document.getElementById('transaction-form').dataset.fixedBillId;
+  }
 
   // Installment logic
   const isInstallment = document.getElementById('tx-installment-toggle')?.checked;
@@ -3197,6 +3424,19 @@ async function handleTransactionForm(e) {
     'success'
   );
   await loadAllData();
+
+  // Trigger Intelligent categorization if user manually linked a Fixed Bill via Edit Form
+  if (id && fixedBillId && type === 'despesa') {
+    const fb = state.fixedBills.find(f => f.id === fixedBillId);
+    const origTx = state.transactions.find(t => t.id === id);
+    const searchDesc = origTx ? origTx.description : description;
+    
+    if (fb && searchDesc) {
+      setTimeout(() => {
+        checkBulkReconciliation(fb, searchDesc, amount);
+      }, 500);
+    }
+  }
 }
 
 window.calibrateCreditCard = function() {
@@ -3698,7 +3938,47 @@ window.removeFixedBill = async (id) => {
 window.payFixedBill = (id) => {
   const b = state.fixedBills.find(b => b.id === id);
   if (!b) return;
-  // Pre-fill the transaction modal
+
+  const now = new Date();
+  
+  // Encontrar despesas candidatas não vinculadas (isPaid = pode ser qualquer coisa, num cenário ideal OFX importa como não pago ou pago dependendo do caso, mas geralmente não está vinculado a fixedBillId)
+  // Vamos buscar transações do tipo "despesa" não vinculadas (sem fixedBillId) nos últimos 45 dias
+  const candidates = state.transactions.filter(t => {
+    if (t.type !== 'despesa') return false;
+    if (t.fixedBillId) return false; // Já vinculado a uma conta fixa
+    // Ignorar faturas de cartão de crédito virtuais ou pagamentos de fatura de cartão já consolidados
+    if (t.categoryId === 'fatura_cartao' || t.description === 'Pagamento de Fatura') return false;
+
+    const td = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+    const diffDays = (td - now) / (1000 * 60 * 60 * 24);
+    
+    // Entre -45 dias (faturas antigas) e +15 dias (faturas futuras pagas antecipadamente)
+    return diffDays >= -45 && diffDays <= 15;
+  });
+
+  if (candidates.length > 0) {
+    // Organizar: Correspondência exata do valor no topo
+    candidates.sort((t1, t2) => {
+      const diff1 = Math.abs(t1.amount - b.amount);
+      const diff2 = Math.abs(t2.amount - b.amount);
+      if (diff1 < 0.1 && diff2 >= 0.1) return -1;
+      if (diff2 < 0.1 && diff1 >= 0.1) return 1;
+      
+      const d1 = t1.date?.toDate ? t1.date.toDate() : new Date(t1.date);
+      const d2 = t2.date?.toDate ? t2.date.toDate() : new Date(t2.date);
+      return d2 - d1; // mais recentes primeiro
+    });
+
+    // Se temos candidatos fortemente relacionados (mesmo valor) ou simplesmente lançamentos não vinculados recentes, mostramos a opção
+    showLinkTransactionModal(b, candidates);
+    return;
+  }
+
+  // Se não tem candidatos recentes, abre direto o criador
+  openNewTransactionForFixedBill(b);
+};
+
+window.openNewTransactionForFixedBill = (b) => {
   openTransactionModal();
   document.getElementById('tx-description').value = b.name;
   document.getElementById('tx-amount').value = b.amount;
@@ -3708,6 +3988,222 @@ window.payFixedBill = (id) => {
   document.querySelectorAll('#tx-type-selector .sg-btn').forEach(btn => btn.classList.remove('active'));
   document.querySelector('#tx-type-selector [data-value="despesa"]')?.classList.add('active');
   document.getElementById('transaction-modal-title').textContent = `Pagar: ${b.name}`;
+  
+  // Set the linked property so saving the transaction marks it for this bill
+  document.getElementById('transaction-form').dataset.fixedBillId = b.id;
+};
+
+// UI Modal for Reconciliation (Link existing imported OFX or manual record)
+window.showLinkTransactionModal = (fixedBill, candidates) => {
+  const overlayId = 'link-tx-modal-overlay';
+  if (document.getElementById(overlayId)) document.getElementById(overlayId).remove();
+
+  let listHtml = candidates.slice(0, 10).map((t, index) => {
+    const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+    const dateStr = d.toLocaleDateString('pt-BR');
+    const isExactMatch = Math.abs(t.amount - fixedBill.amount) < 0.1;
+    const highlightTheme = isExactMatch ? 'border: 2px solid var(--income-color,#10B981); background: rgba(16, 185, 129, 0.05);' : 'border: 1px solid var(--border-color, rgba(255,255,255,0.1)); background: var(--bg-tertiary,rgba(255,255,255,0.03));';
+    const tag = isExactMatch ? `<span style="background:var(--income-color,#10B981);color:#fff;padding:2px 8px;border-radius:12px;font-size:0.65rem;font-weight:bold;margin-left:8px;position:relative;top:-1px;">SUGESTÃO IDEAL</span>` : '';
+    const acc = state.accounts.find(a => a.id === t.accountId);
+    
+    return `
+      <div 
+        style="${highlightTheme} border-radius:12px; padding:12px; margin-bottom:12px; cursor:pointer; transition: transform 0.2s; display:flex; align-items:center; justify-content:space-between;"
+        onclick="confirmLinkTransaction('${fixedBill.id}', '${t.id}')"
+        onmouseover="this.style.transform='translateX(4px)'"
+        onmouseout="this.style.transform='translateX(0)'"
+      >
+        <div style="flex:1;">
+          <div style="font-weight:600;font-size:0.95rem;color:var(--text-primary);margin-bottom:4px;">
+            ${t.description || 'Lançamento sem nome'} ${tag}
+          </div>
+          <div style="font-size:0.8rem;color:var(--text-secondary);display:flex;gap:12px;">
+            <span><i class="fas fa-calendar-day"></i> ${dateStr}</span>
+            <span><i class="fas fa-wallet"></i> ${acc ? acc.name : 'Conta desconhecida'}</span>
+            ${t.fitid ? `<span style="color:var(--primary-color);"><i class="fas fa-file-import"></i> OFX</span>` : ''}
+          </div>
+        </div>
+        <div style="font-weight:bold; font-size:1.1rem; color:var(--expense-color);">
+          R$ ${formatCurrency(t.amount)}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  const modalHtml = `
+    <div id="${overlayId}" style="position:fixed;inset:0;background:rgba(0,0,0,0.8);backdrop-filter:blur(4px);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;">
+      <div style="background:var(--bg-secondary,#1e1e2e);border-radius:16px;width:100%;max-width:600px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,0.5);">
+        
+        <div style="padding:20px;border-bottom:1px solid var(--border-color,rgba(255,255,255,0.1));display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <h2 style="margin:0;font-size:1.3rem;"><i class="fas fa-link" style="color:var(--primary-color);"></i> Vincular Pagamento</h2>
+            <p style="margin:4px 0 0 0;font-size:0.85rem;color:var(--text-secondary);">Encontramos despesas recentes soltas. Alguma delas é o seu pagamento da conta <strong>${fixedBill.name}</strong>?</p>
+          </div>
+          <button onclick="document.getElementById('${overlayId}').remove()" style="background:transparent;border:none;color:var(--text-secondary);cursor:pointer;font-size:1.2rem;padding:0;"><i class="fas fa-times"></i></button>
+        </div>
+        
+        <div style="padding:20px;overflow-y:auto;flex:1;">
+          ${listHtml}
+        </div>
+        
+        <div style="padding:20px;border-top:1px solid var(--border-color,rgba(255,255,255,0.1));display:flex;justify-content:space-between;align-items:center;background:var(--bg-primary);">
+          <span style="font-size:0.85rem;color:var(--text-secondary);">Nenhuma destas é a sua conta?</span>
+          <button class="btn btn-primary" onclick="document.getElementById('${overlayId}').remove(); openNewTransactionForFixedBill(state.fixedBills.find(x => x.id === '${fixedBill.id}'));" style="background:var(--primary-600);font-weight:600;padding:8px 16px;">
+            <i class="fas fa-plus"></i> Criar Novo Pagamento
+          </button>
+        </div>
+        
+      </div>
+    </div>
+  `;
+
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = modalHtml;
+  document.body.appendChild(tempDiv.firstElementChild);
+};
+
+window.confirmLinkTransaction = async (fixedBillId, txId) => {
+  const fb = state.fixedBills.find(f => f.id === fixedBillId);
+  const tx = state.transactions.find(t => t.id === txId);
+  if (!fb || !tx) return;
+
+  // Guarda detalhes originais da transação caso queiramos categorizar as outras idênticas
+  const originalDescription = tx.description;
+  const originalAmount = tx.amount;
+
+  const overlayId = 'link-tx-modal-overlay';
+  if (document.getElementById(overlayId)) document.getElementById(overlayId).remove();
+
+  // Show a temporary processing state
+  showToast('Vinculando...', 'Atualizando lançamento escolhido...', 'info');
+
+  try {
+    const updatedTx = {
+      ...tx,
+      description: fb.name, 
+      category: fb.category || 'Outros',
+      fixedBillId: fb.id,
+      isPaid: true
+    };
+    await saveTransaction(updatedTx, tx.id);
+    showToast('Sucesso!', 'Pagamento vinculado e categorizado com sucesso!', 'success');
+    await loadAllData();
+
+    // Prompts intelligence for bulk reconciliation
+    setTimeout(() => {
+      checkBulkReconciliation(fb, originalDescription, originalAmount);
+    }, 500);
+
+  } catch (err) {
+    console.error('Error linking transaction:', err);
+    showToast('Erro', 'Não foi possível vincular o pagamento.', 'error');
+  }
+};
+
+window.checkBulkReconciliation = async (fb, originalDescription, amount) => {
+  if (!originalDescription) return;
+  
+  // Encontrar outras transações da mesma época que vieram com o mesmo nome
+  const matches = state.transactions.filter(t => 
+    t.type === 'despesa' && 
+    !t.fixedBillId && 
+    (t.description || '').toLowerCase() === originalDescription.toLowerCase()
+  );
+
+  // Sort them by date descending so the list looks organized
+  matches.sort((a,b) => {
+    const da = a.date?.toDate ? a.date.toDate() : new Date(a.date);
+    const db = b.date?.toDate ? b.date.toDate() : new Date(b.date);
+    return db - da;
+  });
+
+  if (matches.length > 0) {
+    const overlayId = 'bulk-link-modal-overlay';
+    if (document.getElementById(overlayId)) return; 
+
+    // Build the list of checkboxes
+    const listHtml = matches.map((t, i) => {
+      const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+      return `
+        <label style="display:flex;align-items:center;padding:12px;border-bottom:1px solid var(--border-color,rgba(255,255,255,0.05));cursor:pointer;gap:12px;transition:background 0.2s;" onmouseover="this.style.background='var(--bg-tertiary, rgba(255,255,255,0.03))'" onmouseout="this.style.background='transparent'">
+          <input type="checkbox" checked value="${t.id}" class="bulk-match-checkbox" style="width:18px;height:18px;accent-color:var(--income-color,#10B981);">
+          <div style="flex:1;">
+            <div style="font-weight:500;">${d.toLocaleDateString('pt-BR')}</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);">${t.description}</div>
+          </div>
+          <div style="font-weight:bold;color:var(--expense-color);">R$ ${formatCurrency(t.amount)}</div>
+        </label>`;
+    }).join('');
+
+    const modalHtml = `
+      <div id="${overlayId}" style="position:fixed;inset:0;background:rgba(0,0,0,0.8);backdrop-filter:blur(4px);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;">
+        <div style="background:var(--bg-secondary,#1e1e2e);border-radius:16px;width:100%;max-width:500px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,0.5); border: 2px solid var(--primary-color);">
+          <div style="padding:20px;border-bottom:1px solid var(--border-color,rgba(255,255,255,0.1));">
+            <h2 style="margin:0;font-size:1.3rem;color:var(--primary-color);"><i class="fas fa-magic"></i> Categorização Inteligente</h2>
+          </div>
+          <div style="padding:20px 20px 10px 20px;text-align:center;">
+            <p style="margin:0 0 8px 0;font-size:1.05rem;line-height:1.5;">
+              Encontramos <strong>${matches.length}</strong> outros lançamentos passados com o nome <em>"${originalDescription}"</em>.
+            </p>
+            <p style="margin:0;color:var(--text-secondary);font-size:0.95rem;">
+              Desmarque aqueles que <strong>NÃO</strong> pertencem a <strong>${fb.name}</strong>:
+            </p>
+          </div>
+          
+          <div style="overflow-y:auto;flex:1;border-top:1px solid var(--border-color,rgba(255,255,255,0.05));border-bottom:1px solid var(--border-color,rgba(255,255,255,0.05));">
+            ${listHtml}
+          </div>
+
+          <div style="padding:20px;display:flex;justify-content:space-between;gap:12px;background:var(--bg-primary);">
+            <button class="btn btn-secondary" style="flex:1;" onclick="document.getElementById('${overlayId}').remove()">Cancelar</button>
+            <button class="btn btn-primary" style="flex:1;background:var(--income-color,#10B981);" onclick="executeBulkLink('${fb.id}')">
+              <i class="fas fa-check-double"></i> Atualizar Selecionados
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+    const temp = document.createElement('div');
+    temp.innerHTML = modalHtml;
+    document.body.appendChild(temp.firstElementChild);
+  }
+};
+
+window.executeBulkLink = async (fixedBillId) => {
+  const overlay = document.getElementById('bulk-link-modal-overlay');
+  if (!overlay) return;
+  
+  const selectedIds = Array.from(overlay.querySelectorAll('.bulk-match-checkbox:checked')).map(cb => cb.value);
+  overlay.remove();
+
+  if (selectedIds.length === 0) return;
+  
+  const fb = state.fixedBills.find(f => f.id === fixedBillId);
+  if (!fb) return;
+
+  showToast('Categorizando...', 'Atualizando transações em lote...', 'info');
+  
+  try {
+    const promises = selectedIds.map(txId => {
+      const tx = state.transactions.find(t => t.id === txId);
+      if (!tx) return Promise.resolve();
+      
+      const updatedTx = {
+        ...tx,
+        description: fb.name, 
+        category: fb.category || 'Outros',
+        fixedBillId: fb.id,
+        isPaid: true
+      };
+      return saveTransaction(updatedTx, tx.id);
+    });
+    
+    await Promise.all(promises);
+    showToast('Concluído!', `${selectedIds.length} lançamentos vinculados com sucesso!`, 'success');
+    await loadAllData();
+  } catch (e) {
+    showToast('Erro', 'Ocorreu um erro ao categorizar.', 'error');
+  }
 };
 
 // ============================
@@ -3835,7 +4331,7 @@ async function handleDeleteAccount() {
   }
 }
 
-window.showInvoiceModal = function(accountId) {
+window.showInvoiceModal = function(accountId, forcedCycleKey = null) {
   const acc = state.accounts.find(a => a.id === accountId);
   if (!acc) return;
 
@@ -3903,6 +4399,7 @@ window.showInvoiceModal = function(accountId) {
     const descLower = (t.description || t.name || '').toLowerCase();
     const isPayment = t.type === 'receita' && (descLower.includes('pagamento') || descLower.includes('fatura') || descLower.includes('recebido'));
     
+    // Para o histórico de faturas, mostramos o tamanho total da fatura (todas as despesas do mês)
     if (!isPayment) {
         // IMPORTANTE: Se não for estritamente 'receita', soma como despesa. 
         // Transações mal formadas ou antigas podem não ter t.type == 'despesa'
@@ -3924,26 +4421,20 @@ window.showInvoiceModal = function(accountId) {
      };
   }
 
-  // --- INJECT PREVIOUS UNPAID DEBT INTO CURRENT CYCLE ---
-  // Apenas a dívida passada (closedDebt) ainda não paga rola para a fatura atual
-  const unpaidPast = Math.abs(acc._closedDebt || 0);
-  if (unpaidPast > 0.01) {
-      invoices[currentCycleKey].txs.push({
-          id: 'unpaid_rollover_dummy',
-          description: 'Saldo da fatura anterior',
-          amount: unpaidPast,
-          type: 'despesa',
-          date: baseCurrentCycle,
-          isPaid: false
-      });
-      invoices[currentCycleKey].total += unpaidPast;
-  }
+  // Não sobrescrevemos o total com dívidas abertas/fechadas porque queremos
+  // que a barra mostre o tamanho histórico exato da fatura, não o quanto falta pagar.
+
 
   let invoiceList = Object.values(invoices).sort((a, b) => a.time - b.time);
   
   const maxTotal = Math.max(...invoiceList.map(i => Math.abs(i.total)), 1);
   let selectedIdx = invoiceList.findIndex(i => i.key === currentCycleKey);
-  if (selectedIdx === -1) selectedIdx = invoiceList.length - 1;
+  if (forcedCycleKey) {
+    const forcedIdx = invoiceList.findIndex(i => i.key === forcedCycleKey);
+    if (forcedIdx !== -1) selectedIdx = forcedIdx;
+  } else if (selectedIdx === -1) {
+    selectedIdx = invoiceList.length - 1;
+  }
 
   let modal = document.getElementById('invoice-modal');
   if (!modal) {
@@ -4070,40 +4561,45 @@ window.showInvoiceModal = function(accountId) {
     if (elCloseDate) elCloseDate.textContent = fechamentoStr;
     
     // Only build DOM fully if initial load or empty, otherwise just update visual state
-    if (elBars && (isInitialLoad || elBars.children.length === 0)) {
-        const barsHTML = invoiceList.map((item, idx) => {
-          const heightPct = Math.max((Math.abs(item.total) / maxTotal) * 100, 2); 
-          const isSel = idx === selectedIdx;
-          const isCurrentCycle = item.time === currentCycleTime;
-          const opacity = isSel ? '1' : '0.4';
-          const weight = isSel ? '800' : '600';
-          const textColor = isSel ? 'var(--text-primary)' : 'var(--text-secondary)';
-          
-          return `
-            <div onclick="_selectInvoiceCycle(${idx})" style="flex-shrink:0; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; gap:8px; cursor:pointer; min-width:64px; scroll-snap-align: center;">
-              <div style="height: 100px; width: 100%; display:flex; align-items:flex-end; justify-content:center;">
-                 <div class="inv-bar" style="height: ${heightPct}%; width: 44px; background-color: var(--primary-500); opacity: ${opacity}; border-radius: 6px 6px 0 0; transition: height 0.3s, opacity 0.3s;"></div>
-              </div>
-              <div class="inv-label" style="font-size:0.75rem; font-weight:${weight}; color:${textColor}; padding-bottom: 8px; text-align:center; min-height: 28px; line-height: 1.2; transition: color 0.3s;">
-                ${item.key}
-                ${isCurrentCycle ? '<br><span style="font-size:0.6rem; font-weight:700; color:var(--primary-color);">atual</span>' : ''}
-              </div>
-            </div>
-          `;
-        }).join('');
-        elBars.innerHTML = barsHTML;
-    } else if (elBars) {
-        // Just update existing bars visually to avoid DOM thrashing and blinking
-        Array.from(elBars.children).forEach((child, idx) => {
-            const isSel = idx === selectedIdx;
-            const bar = child.querySelector('.inv-bar');
-            const label = child.querySelector('.inv-label');
-            if (bar) bar.style.opacity = isSel ? '1' : '0.4';
-            if (label) {
-                label.style.fontWeight = isSel ? '800' : '600';
-                label.style.color = isSel ? 'var(--text-primary)' : 'var(--text-secondary)';
-            }
-        });
+    if (forcedCycleKey) {
+        if (elBars) elBars.style.display = 'none';
+    } else {
+        if (elBars) elBars.style.display = 'flex';
+        if (elBars && (isInitialLoad || elBars.children.length === 0)) {
+            const barsHTML = invoiceList.map((item, idx) => {
+              const heightPct = Math.max((Math.abs(item.total) / maxTotal) * 100, 2); 
+              const isSel = idx === selectedIdx;
+              const isCurrentCycle = item.time === currentCycleTime;
+              const opacity = isSel ? '1' : '0.4';
+              const weight = isSel ? '800' : '600';
+              const textColor = isSel ? 'var(--text-primary)' : 'var(--text-secondary)';
+              
+              return `
+                <div onclick="_selectInvoiceCycle(${idx})" style="flex-shrink:0; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; gap:8px; cursor:pointer; min-width:64px; scroll-snap-align: center;">
+                  <div style="height: 100px; width: 100%; display:flex; align-items:flex-end; justify-content:center;">
+                     <div class="inv-bar" style="height: ${heightPct}%; width: 44px; background-color: var(--primary-500); opacity: ${opacity}; border-radius: 6px 6px 0 0; transition: height 0.3s, opacity 0.3s;"></div>
+                  </div>
+                  <div class="inv-label" style="font-size:0.75rem; font-weight:${weight}; color:${textColor}; padding-bottom: 8px; text-align:center; min-height: 28px; line-height: 1.2; transition: color 0.3s;">
+                    ${item.key}
+                    ${isCurrentCycle ? '<br><span style="font-size:0.6rem; font-weight:700; color:var(--primary-color);">atual</span>' : ''}
+                  </div>
+                </div>
+              `;
+            }).join('');
+            elBars.innerHTML = barsHTML;
+        } else if (elBars) {
+            // Just update existing bars visually to avoid DOM thrashing and blinking
+            Array.from(elBars.children).forEach((child, idx) => {
+                const isSel = idx === selectedIdx;
+                const bar = child.querySelector('.inv-bar');
+                const label = child.querySelector('.inv-label');
+                if (bar) bar.style.opacity = isSel ? '1' : '0.4';
+                if (label) {
+                    label.style.fontWeight = isSel ? '800' : '600';
+                    label.style.color = isSel ? 'var(--text-primary)' : 'var(--text-secondary)';
+                }
+            });
+        }
     }
 
     if (elTxList) elTxList.innerHTML = txHTML;

@@ -107,9 +107,9 @@ export function initImport(onImport, getAccounts, getTransactions, getFamilyProf
     if (getTransactions) {
       const existing = getTransactions();
       const dbCounts = new Map(); // "key|date" -> count
-      const dbInstallments = new Set(); // "base|amount|current/total" -> exists
+      const dbInstallments = []; // array for fuzzy matching
       const dbFitids = new Set(); // fitid -> true
-      const dbAutoInstallments = new Map(); // "instKey" -> tx (transações auto-geradas sem fitid)
+      const dbAutoInstallments = []; // array for fuzzy matching
       
       const normalizeDesc = (desc) => {
         if (!desc) return '';
@@ -137,18 +137,18 @@ export function initImport(onImport, getAccounts, getTransactions, getFamilyProf
         const dayKey = `${ex.type}|${amountCents}|${dStr}|${normBase}`;
         dbCounts.set(dayKey, (dbCounts.get(dayKey) || 0) + 1);
         
-        // Registro global de parcelas (Pichaus)
+            // Registro global de parcelas (Pichaus)
         const isInstallment = (ex.description && (ex.description.includes('/') || ex.installmentInfo));
         if (isInstallment) {
             const instMatch = ex.description.match(/(\d+\/\d+)$/);
             const instCount = instMatch ? instMatch[1] : (ex.installmentInfo ? `${ex.installmentInfo.current}/${ex.installmentInfo.total}` : '1/1');
             const cleanInstCount = instCount.replace(/^0+/, '').replace(/\/0+/, '/'); 
-            const instKey = `INST|${normBase}|${amountCents}|${cleanInstCount}`;
-            dbInstallments.add(instKey);
             
-            // Se for uma parcela auto-gerada (sem fitid), salvar no map para futura atualização
+            dbInstallments.push({ normBase, amountCents, cleanInstCount });
+            
+            // Se for uma parcela auto-gerada (sem fitid), salvar no array para futura atualização
             if (!ex.fitid) {
-              dbAutoInstallments.set(instKey, ex);
+              dbAutoInstallments.push({ normBase, amountCents, cleanInstCount, tx: ex });
             }
         }
       }
@@ -182,13 +182,23 @@ export function initImport(onImport, getAccounts, getTransactions, getFamilyProf
               const cleanInstCount = instCount.replace(/^0+/, '').replace(/\/0+/, '/');
               const instKey = `INST|${normBase}|${amountCents}|${cleanInstCount}`;
               
-              if (t.fitid && dbAutoInstallments.has(instKey)) {
+              // Fuzzy match function (amount within 5 cents, base string included or exact match)
+              const isMatch = (dbItem) => {
+                 if (dbItem.cleanInstCount !== cleanInstCount) return false;
+                 if (Math.abs(dbItem.amountCents - amountCents) > 5) return false;
+                 // Permissive name match (e.g. "hub*magazineluiza12/08" vs "hub*magazineluiza")
+                 return dbItem.normBase.includes(normBase) || normBase.includes(dbItem.normBase);
+              };
+              
+              const autoInstMatch = dbAutoInstallments.find(isMatch);
+              
+              if (t.fitid && autoInstMatch) {
                   // Achou uma parcela gerada pelo sistema que bate com essa do OFX!
-                  updateTargetId = dbAutoInstallments.get(instKey).id;
+                  updateTargetId = autoInstMatch.tx.id;
                   isDuplicate = false; // Não é duplicata, é um UPDATE!
                   if (t.fitid) importCounts.set(t.fitid, true);
               } else {
-                  isDuplicate = dbInstallments.has(instKey) || importCounts.has(instKey);
+                  isDuplicate = dbInstallments.some(isMatch) || importCounts.has(instKey);
                   if (!isDuplicate) importCounts.set(instKey, true); 
               }
             } else {
@@ -321,28 +331,13 @@ function parseNubankCard(rows) {
             category: 'Parcelamento de Fatura',
             original: `Fatura Nubank: ${titleTrimmed}`,
             paymentMethod: 'credito',
-            installmentInfo: { current, total, originalAmount: amount * total }
+            installmentInfo: { 
+              current, 
+              total, 
+              originalAmount: amount * total,
+              baseTitle: `Cartão - ${titleTrimmed.substring(0, titleTrimmed.length - parcelamentoInstMatch[0].length + titleTrimmed.indexOf(parcelamentoInstMatch[0])).replace(/ - \d+\/\d+$/, '').trim()}`
+            }
           });
-          
-          // Gerar parcelas futuras
-          for (let i = current + 1; i <= total; i++) {
-            const futureDate = new Date(date);
-            futureDate.setMonth(futureDate.getMonth() + (i - current));
-            
-            const baseTitle = titleTrimmed.substring(0, titleTrimmed.length - parcelamentoInstMatch[0].length + titleTrimmed.indexOf(parcelamentoInstMatch[0])).replace(/ - \d+\/\d+$/, '').trim();
-            const futureDesc = `Cartão - ${baseTitle} - ${i}/${total}`;
-            
-            txs.push({
-              date: futureDate,
-              description: futureDesc,
-              amount,
-              type,
-              category: 'Parcelamento de Fatura',
-              original: `Fatura Nubank (Auto-gerada): ${baseTitle} - ${i}/${total}`,
-              paymentMethod: 'credito',
-              installmentInfo: { current: i, total, originalAmount: amount * total }
-            });
-          }
           continue;
         }
       }
@@ -362,29 +357,13 @@ function parseNubankCard(rows) {
              category: suggestCategory(descFinal),
              original: `Fatura Nubank: ${title.trim()}`,
              paymentMethod: 'credito',
-             installmentInfo: { current, total, originalAmount: amount * total }
+             installmentInfo: { 
+               current, 
+               total, 
+               originalAmount: amount * total,
+               baseTitle: `Cartão - ${title.trim().substring(0, title.trim().length - instMatch[0].length).trim()}`
+             }
            });
-           
-           // Gera as parcelas futuras para comprometer o limite do cartão
-           for (let i = current + 1; i <= total; i++) {
-             const futureDate = new Date(date);
-             futureDate.setMonth(futureDate.getMonth() + (i - current));
-             
-             // Cria o novo título com a contagem atualizada — mantendo formato consistente
-             const baseTitle = title.trim().substring(0, title.trim().length - instMatch[0].length).trim();
-             const futureDesc = `Cartão - ${baseTitle} - ${i}/${total}`;
-             
-             txs.push({
-               date: futureDate,
-               description: futureDesc,
-               amount,
-               type,
-               category: suggestCategory(futureDesc),
-               original: `Fatura Nubank (Auto-gerada): ${baseTitle} - ${i}/${total}`,
-               paymentMethod: 'credito',
-               installmentInfo: { current: i, total, originalAmount: amount * total }
-             });
-           }
            continue; 
          }
       }
@@ -538,28 +517,13 @@ function parseOFX(text) {
             category: suggestCategory(cleanDesc),
             original: `OFX: ${rawDesc}`,
             paymentMethod: 'credito',
-            installmentInfo: { current, total, originalAmount: amount * total }
+            installmentInfo: { 
+              current, 
+              total, 
+              originalAmount: amount * total,
+              baseTitle: cleanDesc.substring(0, cleanDesc.length - instMatch[0].length).trim()
+            }
           });
-
-          // Gera parcelas futuras
-          for (let i = current + 1; i <= total; i++) {
-            const futureDate = new Date(date);
-            futureDate.setMonth(futureDate.getMonth() + (i - current));
-
-            const baseDesc = cleanDesc.substring(0, cleanDesc.length - instMatch[0].length).trim();
-            const futureDesc = `${baseDesc} - ${i}/${total}`;
-
-            txs.push({
-              date: futureDate,
-              description: futureDesc,
-              amount,
-              type: 'despesa',
-              category: suggestCategory(futureDesc),
-              original: `OFX (Auto-gerada): ${baseDesc} - ${i}/${total}`,
-              paymentMethod: 'credito',
-              installmentInfo: { current: i, total, originalAmount: amount * total }
-            });
-          }
           continue;
         }
       }

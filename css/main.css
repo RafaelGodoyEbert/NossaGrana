@@ -34,6 +34,7 @@
   /* Semantic */
   --income-color: #10b981;
   --income-bg: #d1fae5;
+  --success-color: #10b981;
   --expense-color: #ef4444;
   --expense-bg: #fee2e2;
   --warning-color: #f59e0b;
@@ -111,6 +112,7 @@
   --shadow-xl: 0 20px 50px rgba(0, 0, 0, 0.6);
 
   --income-bg: rgba(16, 185, 129, 0.15);
+  --success-color: #10b981;
   --expense-bg: rgba(239, 68, 68, 0.15);
   --warning-bg: rgba(245, 158, 11, 0.15);
   --info-bg: rgba(59, 130, 246, 0.15);
@@ -307,6 +309,7 @@ input::placeholder, textarea::placeholder {
   border: 1px solid var(--border-color);
   padding: var(--space-lg);
   transition: all var(--transition-normal);
+  min-width: 0;
 }
 .card:hover {
   box-shadow: var(--shadow-md);
@@ -317,6 +320,7 @@ input::placeholder, textarea::placeholder {
   border-radius: var(--border-radius-lg);
   border: 1px solid var(--border-color);
   padding: var(--space-xl);
+  min-width: 0;
 }
 
 /* --- Utility --- */

@@ -1,0 +1,276 @@
+diff --git a/css/main.css b/css/main.css
+index 1b73398..5423e54 100644
+--- a/css/main.css
++++ b/css/main.css
+@@ -34,6 +34,7 @@
+   /* Semantic */
+   --income-color: #10b981;
+   --income-bg: #d1fae5;
++  --success-color: #10b981;
+   --expense-color: #ef4444;
+   --expense-bg: #fee2e2;
+   --warning-color: #f59e0b;
+@@ -111,6 +112,7 @@
+   --shadow-xl: 0 20px 50px rgba(0, 0, 0, 0.6);
+ 
+   --income-bg: rgba(16, 185, 129, 0.15);
++  --success-color: #10b981;
+   --expense-bg: rgba(239, 68, 68, 0.15);
+   --warning-bg: rgba(245, 158, 11, 0.15);
+   --info-bg: rgba(59, 130, 246, 0.15);
+diff --git a/js/main.js b/js/main.js
+index 6085106..33645ca 100644
+--- a/js/main.js
++++ b/js/main.js
+@@ -365,6 +365,68 @@ window.payCurrentInvoice = async function(accountId) {
+   }
+ };
+ 
++window.paySpecificInvoice = async function(accountId, cycleKey) {
++  const acc = state.accounts.find(a => a.id === accountId);
++  if (!acc || acc.type !== 'cartao_credito') return;
++  if (!db) { showToast('Modo Demo', 'N├úo dispon├¡vel no modo demo.', 'warning'); return; }
++
++  const closingDay = acc.closingDay || 1;
++  const getCycleKey = (date) => {
++    const m = date.toLocaleString('pt-BR', { month: 'short' }).toUpperCase().replace('.', '');
++    const y = date.getFullYear().toString().slice(2);
++    return `${m} ${y}`;
++  };
++
++  const txsInCycle = state.transactions.filter(t => {
++    if (t.accountId !== accountId || t.isPaid) return false;
++    const txDate = t.date?.toDate ? t.date.toDate() : new Date(t.date);
++    let cycleMonthDate = new Date(txDate.getFullYear(), txDate.getMonth(), closingDay);
++    if (txDate.getDate() >= closingDay) {
++        cycleMonthDate.setMonth(cycleMonthDate.getMonth() + 1);
++    }
++    return getCycleKey(cycleMonthDate) === cycleKey;
++  });
++
++  if (txsInCycle.length === 0) {
++    showToast('Sem pend├¬ncias', 'N├úo h├í transa├º├Áes pendentes nesta fatura.', 'info');
++    return;
++  }
++
++  const total = txsInCycle.reduce((s, t) => {
++    let amt = Number(t.amount) || 0;
++    const descLower = (t.description || t.name || '').toLowerCase();
++    const isPayment = t.type === 'receita' && (descLower.includes('pagamento') || descLower.includes('fatura') || descLower.includes('recebido'));
++    if (isPayment) return s; 
++    return s + (t.type === 'receita' ? -amt : amt);
++  }, 0);
++
++  if (!confirm(`­ƒÆ│ Pagar a fatura do cart├úo "${acc.name}" correspondente a ${cycleKey}?\n\n${txsInCycle.length} transa├º├úo(├Áes) pendentes.\nTotal a liquidar: ${formatCurrency(Math.abs(total))}\n\nIsso marcar├í todas essas compras como PAGAS.`)) return;
++
++  try {
++    for (let i = 0; i < txsInCycle.length; i += 500) {
++      const chunk = txsInCycle.slice(i, i + 500);
++      const batch = db.batch();
++      chunk.forEach(t => {
++        batch.update(db.collection('transactions').doc(t.id), { isPaid: true });
++      });
++      await batch.commit();
++    }
++
++    showToast('Fatura Paga! Ô£à', `${txsInCycle.length} transa├º├Áes liquidadas ÔÇö ${formatCurrency(Math.abs(total))}`, 'success');
++    
++    // Fecha o modal caso esteja aberto dessa fatura espec├¡fica
++    const modal = document.getElementById('invoice-modal');
++    if (modal && !modal.classList.contains('hidden')) {
++        closeModal('invoice-modal');
++    }
++    
++    await loadAllData();
++  } catch (err) {
++    console.error('Erro ao pagar fatura isolada:', err);
++    showToast('Erro', 'N├úo foi poss├¡vel marcar a fatura como paga.', 'error');
++  }
++};
++
+ // ============================
+ // Chat Transaction Handler
+ // ============================
+@@ -1360,7 +1422,7 @@ function renderAccounts() {
+         statsHtml = `
+               <div class="acc-stats" style="flex-direction:column;align-items:stretch;background:transparent;padding:0;">
+                 <div style="display:flex;justify-content:space-between;font-size:0.85rem;margin-bottom:8px;">
+-                  <span style="color:var(--text-secondary);">Dispon├¡vel: <strong style="color:var(--success-color);font-size:1rem;">${formatCurrency(available)}</strong></span>
++                  <span style="color:var(--text-secondary);">Dispon├¡vel: <strong style="color:var(--income-color);font-size:1rem;">${formatCurrency(available)}</strong></span>
+                   <span style="color:var(--text-secondary);font-size:0.75rem;">Limite: ${formatCurrency(limit)}</span>
+                 </div>
+                 <div class="progress-bar" style="background:var(--bg-tertiary); height:8px; border-radius:4px; margin:0;">
+@@ -1375,7 +1437,7 @@ function renderAccounts() {
+                   <button class="btn btn-sm btn-primary" onclick="showInvoiceModal('${acc.id}')" title="Ver Detalhes da Fatura" style="font-size:0.65rem; padding:4px 8px; border:none; border-radius:6px; cursor:pointer;">
+                     <i class="fas fa-list-alt"></i> Ver Faturas
+                   </button>
+-                  <button class="btn btn-sm" onclick="payCurrentInvoice('${acc.id}')" title="Marcar fatura fechada como paga" style="font-size:0.65rem; padding:4px 10px; background:var(--success-color); color:#fff; border:none; border-radius:6px; cursor:pointer;">
++                  <button class="btn btn-sm" onclick="payCurrentInvoice('${acc.id}')" title="Marcar fatura fechada como paga" style="font-size:0.65rem; padding:4px 10px; background:var(--income-color); color:#fff; border:none; border-radius:6px; cursor:pointer;">
+                     <i class="fas fa-check-circle"></i> Pagar Fatura
+                   </button>
+                   <button class="btn btn-sm btn-secondary" onclick="cleanCreditCardDuplicates('${acc.id}')" title="Limpar duplicatas" style="font-size:0.65rem; padding:4px 8px;">
+@@ -1562,7 +1624,7 @@ window.cleanCreditCardDuplicates = async function(accountId) {
+             <div style="flex:1;">
+               <div style="font-weight:500;font-size:0.95rem;">${t.description || t.category}</div>
+               <div style="font-size:0.8rem;color:var(--text-secondary);">
+-                ${d.toLocaleDateString('pt-BR')} ÔÇó ${t.category} ${t.fitid ? ' <span style="color:var(--success-color);font-size:0.75rem;margin-left:6px;"><i class="fas fa-link"></i> Importado (OFX)</span>' : ''}
++                ${d.toLocaleDateString('pt-BR')} ÔÇó ${t.category} ${t.fitid ? ' <span style="color:var(--income-color);font-size:0.75rem;margin-left:6px;"><i class="fas fa-link"></i> Importado (OFX)</span>' : ''}
+               </div>
+             </div>
+           </label>
+@@ -1791,7 +1853,20 @@ function renderPayables() {
+   const next7 = [];
+   const next30 = [];
+ 
++  const creditCardInvoices = [];
++  
++  const getCycleKey = (date) => {
++    const m = date.toLocaleString('pt-BR', { month: 'short' }).toUpperCase().replace('.', '');
++    const y = date.getFullYear().toString().slice(2);
++    return `${m} ${y}`;
++  };
++
+   pending.forEach(t => {
++    const acc = state.accounts.find(a => a.id === t.accountId);
++    if (acc && acc.type === 'cartao_credito') {
++      return; // Ignora transa├º├Áes individuais de cart├úo
++    }
++
+     let d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+     d.setHours(0, 0, 0, 0);
+     const tTime = d.getTime();
+@@ -1802,6 +1877,42 @@ function renderPayables() {
+     else if (tTime <= next30Time) next30.push(t);
+   });
+ 
++  // Criar faturas a partir dos c├ílculos de saldo das contas
++  state.accounts.filter(a => a.type === 'cartao_credito').forEach(acc => {
++    const createVirtualInvoice = (debt, cycleEnd, isClosed) => {
++      if (Math.abs(debt) < 0.01) return;
++      
++      const cycleKey = getCycleKey(cycleEnd);
++      let dueDate = new Date(cycleEnd.getTime());
++      dueDate.setDate(acc.dueDay || acc.closingDay);
++      if ((acc.dueDay || acc.closingDay) < acc.closingDay) {
++          dueDate.setMonth(dueDate.getMonth() + 1);
++      }
++      dueDate.setHours(0, 0, 0, 0);
++
++      const inv = {
++        _isCreditCardInvoice: true,
++        accountId: acc.id,
++        cycleKey: cycleKey,
++        description: `Fatura ${acc.name} (${cycleKey})` + (isClosed ? ' - Fechada' : ''),
++        category: acc.name,
++        dueDate: dueDate,
++        amount: Math.abs(debt),
++        type: 'despesa',
++        txCount: 'V├írias'
++      };
++      
++      const tTime = dueDate.getTime();
++      if (tTime < todayTime) overdue.push(inv);
++      else if (tTime === todayTime) today.push(inv);
++      else if (tTime <= next7Time) next7.push(inv);
++      else if (tTime <= next30Time) next30.push(inv);
++    };
++
++    if (acc._closedDebt) createVirtualInvoice(acc._closedDebt, acc._prevCycleEnd, true);
++    if (acc._openDebt) createVirtualInvoice(acc._openDebt, acc._currentCycleEnd, false);
++  });
++
+   // Generate fixed bill reminders for current month
+   const fixedBillReminders = generateFixedBillReminders(now, todayTime, next7Time, next30Time);
+ 
+@@ -1817,6 +1928,28 @@ function renderPayables() {
+       return;
+     }
+     container.innerHTML = items.map(t => {
++      if (t._isCreditCardInvoice) {
++        const formattedDate = t.dueDate.toLocaleDateString('pt-BR');
++        return `
++        <div class="payable-item" style="cursor:pointer; transition:transform 0.2s;" onmouseover="this.style.transform='translateX(4px)'" onmouseout="this.style.transform='translateX(0)'" onclick="showInvoiceModal('${t.accountId}', '${t.cycleKey}')">
++          <div class="tx-icon expense"><i class="fas fa-file-invoice-dollar"></i></div>
++          <div class="tx-details" style="flex:1;">
++            <div class="tx-desc" style="font-weight:600; color:var(--text-primary); display:flex; align-items:center;">
++              ${t.description} 
++              <span style="background:var(--primary-700,#7c3aed);color:#fff;padding:2px 6px;border-radius:4px;font-size:0.65rem;font-weight:bold;margin-left:8px;vertical-align:middle;"><i class="fas fa-credit-card" style="margin-right:2px;"></i>CART├âO</span>
++            </div>
++            <div class="tx-meta" style="font-size:0.75rem; color:var(--text-secondary); margin-top:4px;">
++              <span><i class="fas fa-calendar-alt"></i> Vencimento: ${formattedDate}</span>
++              <span style="margin-left:12px;"><i class="fas fa-receipt"></i> M├║ltiplas pend├¬ncias</span>
++            </div>
++          </div>
++          <div class="tx-amount expense" style="font-weight:bold; font-size:1.1rem; padding-right:16px;">- ${formatCurrency(t.amount)}</div>
++          <div class="payable-actions" onclick="event.stopPropagation();" style="display:flex; align-items:center;">
++             <button class="btn-pay" onclick="paySpecificInvoice('${t.accountId}', '${t.cycleKey}')" title="Marcar esta fatura como paga" style="padding:6px 12px; border-radius:8px; font-weight:600; font-size:0.8rem; background: rgba(0, 200, 83, 0.1); color: var(--income-color, #00C853); border: 1px solid rgba(0, 200, 83, 0.2); cursor:pointer;"><i class="fas fa-check-circle" style="margin-right:4px;"></i> Pagar Fatura</button>
++          </div>
++        </div>`;
++      }
++
+       const isReminder = t._isFixedBillReminder;
+       const typeClass = t.type === 'receita' ? 'income' : 'expense';
+       const icon = isReminder ? '<i class="fas fa-calendar-check"></i>' : (t.type === 'receita' ? '<i class="fas fa-arrow-down"></i>' : '<i class="fas fa-arrow-up"></i>');
+@@ -1826,11 +1959,6 @@ function renderPayables() {
+       const category = t.category || 'Outros';
+       const fixedBadge = isReminder ? '<span class="fixed-bill-badge"><i class="fas fa-redo"></i> Conta Fixa</span>' : '';
+ 
+-      // Check if this transaction belongs to a credit card account
+-      const txAccount = !isReminder ? state.accounts.find(a => a.id === t.accountId) : null;
+-      const isCreditCard = txAccount && txAccount.type === 'cartao_credito';
+-      const creditBadge = isCreditCard ? `<span style="background:var(--primary-700,#7c3aed);color:#fff;padding:1px 6px;border-radius:4px;font-size:0.65rem;font-weight:bold;margin-left:6px;"><i class="fas fa-credit-card" style="margin-right:2px;"></i>CART├âO</span>` : '';
+-
+       const actionButtons = isReminder
+         ? `<div class="payable-actions">
+              <button class="btn-pay" onclick="payFixedBill('${t._fixedBillId}')" title="Registrar Pagamento"><i class="fas fa-check-circle"></i> Pagar</button>
+@@ -1844,7 +1972,7 @@ function renderPayables() {
+         <div class="payable-item">
+           <div class="tx-icon ${isReminder ? '' : typeClass}" style="${isReminder ? 'color:var(--primary-600);' : ''}">${icon}</div>
+           <div class="tx-details" style="flex:1;">
+-            <div class="tx-desc" style="font-weight:600;">${t.description || t.name} ${fixedBadge}${creditBadge}</div>
++            <div class="tx-desc" style="font-weight:600;">${t.description || t.name} ${fixedBadge}</div>
+             <div class="tx-meta" style="font-size:0.75rem; color:var(--text-secondary);">
+               <span><i class="fas fa-calendar-alt"></i> ${formattedDate}</span>
+               <span style="margin-left:8px;"><i class="fas fa-tag"></i> ${category}</span>
+@@ -3835,7 +3963,7 @@ async function handleDeleteAccount() {
+   }
+ }
+ 
+-window.showInvoiceModal = function(accountId) {
++window.showInvoiceModal = function(accountId, forcedCycleKey = null) {
+   const acc = state.accounts.find(a => a.id === accountId);
+   if (!acc) return;
+ 
+@@ -3943,7 +4071,12 @@ window.showInvoiceModal = function(accountId) {
+   
+   const maxTotal = Math.max(...invoiceList.map(i => Math.abs(i.total)), 1);
+   let selectedIdx = invoiceList.findIndex(i => i.key === currentCycleKey);
+-  if (selectedIdx === -1) selectedIdx = invoiceList.length - 1;
++  if (forcedCycleKey) {
++    const forcedIdx = invoiceList.findIndex(i => i.key === forcedCycleKey);
++    if (forcedIdx !== -1) selectedIdx = forcedIdx;
++  } else if (selectedIdx === -1) {
++    selectedIdx = invoiceList.length - 1;
++  }
+ 
+   let modal = document.getElementById('invoice-modal');
+   if (!modal) {
+@@ -4070,6 +4203,10 @@ window.showInvoiceModal = function(accountId) {
+     if (elCloseDate) elCloseDate.textContent = fechamentoStr;
+     
+     // Only build DOM fully if initial load or empty, otherwise just update visual state
++    if (forcedCycleKey) {
++        if (elBars) elBars.style.display = 'none';
++    } else {
++        if (elBars) elBars.style.display = 'flex';
+         if (elBars && (isInitialLoad || elBars.children.length === 0)) {
+             const barsHTML = invoiceList.map((item, idx) => {
+               const heightPct = Math.max((Math.abs(item.total) / maxTotal) * 100, 2); 
+@@ -4105,6 +4242,7 @@ window.showInvoiceModal = function(accountId) {
+                 }
+             });
+         }
++    }
+ 
+     if (elTxList) elTxList.innerHTML = txHTML;
+ 

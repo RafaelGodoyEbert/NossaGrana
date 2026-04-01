@@ -963,7 +963,45 @@ function renderDashboardWidgets(txs) {
   const next30Time = now.getTime() + (30 * 24 * 60 * 60 * 1000);
 
   // Faturas Próximas (próximos 30 dias com base no pendente do mês)
-  const pending = txs.filter(t => !t.isPaid).filter(t => t.type === 'despesa');
+  let pending = txs.filter(t => !t.isPaid).filter(t => t.type === 'despesa');
+
+  // Excluir compras individuais de cartão de crédito e substitui-las por faturas agregadas
+  pending = pending.filter(t => {
+    const acc = state.accounts.find(a => a.id === t.accountId);
+    return !(acc && acc.type === 'cartao_credito');
+  });
+
+  const getCycleKey = (date) => {
+    const m = date.toLocaleString('pt-BR', { month: 'short' }).toUpperCase().replace('.', '');
+    const y = date.getFullYear().toString().slice(2);
+    return `${m} ${y}`;
+  };
+
+  state.accounts.filter(a => a.type === 'cartao_credito').forEach(acc => {
+    const createVirtualInvoice = (debt, cycleEnd, isClosed) => {
+      if (Math.abs(debt) < 0.01) return;
+      const cycleKey = getCycleKey(cycleEnd);
+      let dueDate = new Date(cycleEnd.getTime());
+      dueDate.setDate(acc.dueDay || acc.closingDay);
+      if ((acc.dueDay || acc.closingDay) < acc.closingDay) {
+          dueDate.setMonth(dueDate.getMonth() + 1);
+      }
+      dueDate.setHours(0, 0, 0, 0);
+      pending.push({
+        _isCreditCardInvoice: true,
+        description: `Fatura ${acc.name} (${cycleKey})` + (isClosed ? ' - Fechada' : ''),
+        category: 'Cartão de Crédito',
+        date: dueDate,
+        amount: Math.abs(debt),
+        type: 'despesa'
+      });
+    };
+
+    if (acc._closedDebt) createVirtualInvoice(acc._closedDebt, acc._prevCycleEnd, true);
+    if (acc.currentInvoice) createVirtualInvoice(acc.currentInvoice, acc._currentCycleEnd, false);
+    if (acc._nextInvoice) createVirtualInvoice(acc._nextInvoice, acc._nextCycleEnd, false);
+  });
+
   const upcoming = pending.filter(t => {
     let d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
     d.setHours(0, 0, 0, 0);
@@ -1000,7 +1038,7 @@ function renderDashboardWidgets(txs) {
       return `
         <div style="margin-bottom:12px;">
           <div style="display:flex; justify-content:space-between; font-size:0.8rem; margin-bottom:4px;">
-            <span>${b.name}</span>
+            <span>${b.category}</span>
             <span><strong style="color:${color}">${formatCurrency(spent)}</strong> / ${formatCurrency(b.limit)}</span>
           </div>
           <div class="progress-bar" style="background:var(--bg-tertiary); height:6px; border-radius:3px; margin:0;">
@@ -1499,7 +1537,7 @@ function renderAccounts() {
         const usedForLimit = Math.abs(totalDebt);
         const available = Math.max(0, limit - usedForLimit);
         const pct = limit > 0 ? Math.min((usedForLimit / limit) * 100, 100) : 0;
-        const barColor = pct > 90 ? 'var(--expense-color)' : pct > 70 ? 'var(--warning-color)' : 'var(--primary-color)';
+        const barColor = pct > 90 ? 'var(--expense-color)' : pct > 70 ? 'var(--warning-color)' : 'var(--primary-500)';
 
         // Info do ciclo de faturamento
         const prevStartStr = acc._prevCycleStart ? acc._prevCycleStart.toLocaleDateString('pt-BR', {day:'2-digit', month:'short'}) : '?';
@@ -3306,7 +3344,12 @@ async function handleTransactionForm(e) {
   const category = document.getElementById('tx-category').value.trim();
   const type = document.getElementById('tx-type').value;
   const accountId = document.getElementById('tx-account').value;
-  const isPaid = document.getElementById('tx-paid').checked;
+  let isPaid = document.getElementById('tx-paid').checked;
+
+  const targetAcc = state.accounts.find(a => a.id === accountId);
+  if (targetAcc && targetAcc.type === 'cartao_credito') {
+    isPaid = false;
+  }
 
   if (!description || !amount || !category) {
     showToast('Campos obrigatórios', 'Preencha descrição, valor e categoria', 'warning');

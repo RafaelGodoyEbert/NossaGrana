@@ -144,6 +144,12 @@
   box-shadow: none;
 }
 
+@media (max-width: 768px) {
+  .chat-input-area {
+    padding-right: 72px;
+  }
+}
+
 .chat-send-btn {
   width: 36px; height: 36px;
   border-radius: var(--border-radius-full);

@@ -732,6 +732,24 @@
           <div class="profile-section">
             <h3><i class="fas fa-user"></i> Informações Pessoais</h3>
             <form id="profile-form">
+              <!-- Profile Photo Upload -->
+              <div class="profile-photo-area">
+                <div class="profile-photo-wrapper" id="profile-photo-wrapper">
+                  <div class="profile-photo-placeholder" id="profile-photo-placeholder">
+                    <span id="profile-photo-initial">U</span>
+                  </div>
+                  <img src="" alt="Foto de perfil" class="profile-photo-img hidden" id="profile-photo-img">
+                  <div class="profile-photo-overlay" id="profile-photo-overlay">
+                    <i class="fas fa-camera"></i>
+                    <span>Alterar foto</span>
+                  </div>
+                </div>
+                <input type="file" id="profile-photo-input" accept="image/*" class="hidden">
+                <button type="button" class="btn btn-sm btn-secondary" id="profile-photo-remove-btn" style="display:none;">
+                  <i class="fas fa-trash-alt"></i> Remover foto
+                </button>
+              </div>
+
               <div class="form-row">
                 <div class="form-group">
                   <label for="profile-name">Nome</label>
@@ -951,9 +969,15 @@
       <h3 id="account-modal-title">Nova Conta</h3>
       <form id="account-form">
         <input type="hidden" id="acc-id">
-        <div class="form-group">
-          <label for="acc-name">Nome da Conta</label>
-          <input type="text" id="acc-name" placeholder="Ex: Nubank, Carteira..." required>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="acc-name">Nome da Conta</label>
+            <input type="text" id="acc-name" placeholder="Ex: Nubank, Carteira..." required>
+          </div>
+          <div class="form-group">
+            <label for="acc-owner-tag">Tag / Titular (Opcional)</label>
+            <input type="text" id="acc-owner-tag" placeholder="Ex: João, Maria, Conjunta...">
+          </div>
         </div>
         <div class="form-row">
           <div class="form-group">

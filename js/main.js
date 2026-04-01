@@ -1433,6 +1433,54 @@ function cancelInlineEdit(cell, originalContent) {
 // ============================
 // Accounts Page
 // ============================
+
+// Bank logo detection based on account name keywords
+const BANK_LOGOS = [
+  { keywords: ['nubank', 'nu '], logo: 'https://logo.clearbit.com/nubank.com.br', color: '#820AD1' },
+  { keywords: ['inter', 'banco inter'], logo: 'https://logo.clearbit.com/bancointer.com.br', color: '#FF7A00' },
+  { keywords: ['bradesco'], logo: 'https://logo.clearbit.com/bradesco.com.br', color: '#CC092F' },
+  { keywords: ['itau', 'itaú'], logo: 'https://logo.clearbit.com/itau.com.br', color: '#003399' },
+  { keywords: ['caixa', 'cef'], logo: 'https://logo.clearbit.com/caixa.gov.br', color: '#005CA9' },
+  { keywords: ['banco do brasil', ' bb', 'bb '], logo: 'https://logo.clearbit.com/bb.com.br', color: '#FECE00' },
+  { keywords: ['santander'], logo: 'https://logo.clearbit.com/santander.com.br', color: '#EC0000' },
+  { keywords: ['c6', 'c6 bank'], logo: 'https://logo.clearbit.com/c6bank.com.br', color: '#242424' },
+  { keywords: ['pagbank', 'pagseguro'], logo: 'https://logo.clearbit.com/pagbank.com.br', color: '#00A651' },
+  { keywords: ['mercado pago', 'mercadopago'], logo: 'https://logo.clearbit.com/mercadopago.com.br', color: '#009EE3' },
+  { keywords: ['neon'], logo: 'https://logo.clearbit.com/neon.com.br', color: '#0DC5FF' },
+  { keywords: ['next'], logo: 'https://logo.clearbit.com/next.me', color: '#00E68A' },
+  { keywords: ['btg'], logo: 'https://logo.clearbit.com/btgpactual.com', color: '#1A2537' },
+  { keywords: ['xp'], logo: 'https://logo.clearbit.com/xpi.com.br', color: '#000000' },
+  { keywords: ['rico'], logo: 'https://logo.clearbit.com/rico.com.vc', color: '#FF5500' },
+  { keywords: ['sicoob'], logo: 'https://logo.clearbit.com/sicoob.com.br', color: '#003641' },
+  { keywords: ['sicredi'], logo: 'https://logo.clearbit.com/sicredi.com.br', color: '#006633' },
+  { keywords: ['original'], logo: 'https://logo.clearbit.com/original.com.br', color: '#00A651' },
+  { keywords: ['safra'], logo: 'https://logo.clearbit.com/safra.com.br', color: '#002D62' },
+  { keywords: ['picpay'], logo: 'https://logo.clearbit.com/picpay.com', color: '#21C25E' },
+  { keywords: ['will', 'willbank'], logo: 'https://logo.clearbit.com/willbank.com.br', color: '#FF2D78' },
+  { keywords: ['stone'], logo: 'https://logo.clearbit.com/stone.com.br', color: '#00A868' },
+  { keywords: ['iti'], logo: 'https://logo.clearbit.com/iti.itau', color: '#FF6600' },
+  { keywords: ['binance'], logo: 'https://logo.clearbit.com/binance.com', color: '#F0B90B' },
+  { keywords: ['wise'], logo: 'https://logo.clearbit.com/wise.com', color: '#9FE870' },
+  { keywords: ['paypal'], logo: 'https://logo.clearbit.com/paypal.com', color: '#003087' },
+  { keywords: ['modal'], logo: 'https://logo.clearbit.com/modalmais.com.br', color: '#FF6B00' },
+  { keywords: ['daycoval'], logo: 'https://logo.clearbit.com/daycoval.com.br', color: '#004B87' },
+  { keywords: ['pan'], logo: 'https://logo.clearbit.com/bancopan.com.br', color: '#0066CC' },
+  { keywords: ['bmg'], logo: 'https://logo.clearbit.com/bancobmg.com.br', color: '#F47920' },
+  { keywords: ['sofisa'], logo: 'https://logo.clearbit.com/sofisadireto.com.br', color: '#1E3A5F' },
+];
+
+function getBankLogo(accountName) {
+  const nameLower = ` ${(accountName || '').toLowerCase()} `;
+  for (const bank of BANK_LOGOS) {
+    for (const kw of bank.keywords) {
+      if (nameLower.includes(kw.toLowerCase())) {
+        return bank;
+      }
+    }
+  }
+  return null;
+}
+
 function renderAccounts() {
   const summaryContainer = document.getElementById('accounts-summary');
   const groupedContainer = document.getElementById('accounts-grouped-list');
@@ -1587,13 +1635,23 @@ function renderAccounts() {
             `;
       }
 
+      const bankInfo = getBankLogo(acc.name);
+      const logoHtml = bankInfo
+        ? `<img src="${bankInfo.logo}" alt="" class="bank-logo" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+           <div class="bank-logo-fallback" style="display:none;background:${bankInfo.color}"><i class="fas fa-university"></i></div>`
+        : `<div class="bank-logo-fallback" style="background:var(--primary-500,#6366f1)"><i class="fas fa-wallet"></i></div>`;
+
       return `
           <div class="account-card-enhanced">
             <div class="acc-main">
-              <div class="acc-name-area">
-                <span class="acc-name">${acc.name}</span>
-                ${acc.type === 'cartao_credito' && acc.closingDay ? `<span class="badge" style="font-size:0.6rem;background:var(--bg-tertiary);margin-left:8px;">Fecha dia ${acc.closingDay}</span>` : ''}
-                ${acc.initialAdjustment ? `<i class="fas fa-magic" title="Possui ajuste manual de ${formatCurrency(acc.initialAdjustment)}" style="font-size:0.7rem;margin-left:4px;color:var(--primary-color);"></i>` : ''}
+              <div class="acc-logo-name">
+                ${logoHtml}
+                <div class="acc-name-area">
+                  <span class="acc-name">${acc.name}</span>
+                  ${acc.ownerTag ? `<span class="badge" style="font-size:0.6rem;background:var(--primary-color);color:#fff;margin-left:8px;"><i class="fas fa-tag"></i> ${acc.ownerTag}</span>` : ''}
+                  ${acc.type === 'cartao_credito' && acc.closingDay ? `<span class="badge" style="font-size:0.6rem;background:var(--bg-tertiary);margin-left:8px;">Fecha dia ${acc.closingDay}</span>` : ''}
+                  ${acc.initialAdjustment ? `<i class="fas fa-magic" title="Possui ajuste manual de ${formatCurrency(acc.initialAdjustment)}" style="font-size:0.7rem;margin-left:4px;color:var(--primary-color);"></i>` : ''}
+                </div>
               </div>
               <div class="acc-actions-area">
                 <span class="acc-balance ${balance >= 0 ? 'text-income' : 'text-expense'}">${formatCurrency(balance)}</span>
@@ -3056,10 +3114,51 @@ function renderProfile() {
   document.getElementById('profile-name').value = state.profile?.name || '';
   document.getElementById('profile-email').value = state.profile?.email || '';
 
+  // Profile photo
+  const photoUrl = state.profile?.photoUrl;
+  const photoImg = document.getElementById('profile-photo-img');
+  const photoPlaceholder = document.getElementById('profile-photo-placeholder');
+  const photoInitial = document.getElementById('profile-photo-initial');
+  const removeBtn = document.getElementById('profile-photo-remove-btn');
+
+  if (photoUrl) {
+    photoImg.src = photoUrl;
+    photoImg.classList.remove('hidden');
+    photoPlaceholder.style.display = 'none';
+    if (removeBtn) removeBtn.style.display = '';
+  } else {
+    photoImg.classList.add('hidden');
+    photoImg.src = '';
+    photoPlaceholder.style.display = '';
+    if (removeBtn) removeBtn.style.display = 'none';
+  }
+  if (photoInitial) {
+    photoInitial.textContent = (state.profile?.name || 'U')[0].toUpperCase();
+  }
+
   // Sidebar
   document.getElementById('sidebar-name').textContent = state.profile?.name || 'Usuário';
   document.getElementById('sidebar-role').textContent = state.profile?.role === 'admin' ? 'Administrador(a)' : 'Membro';
-  document.getElementById('sidebar-avatar').textContent = (state.profile?.name || 'U')[0].toUpperCase();
+  
+  const sidebarAvatar = document.getElementById('sidebar-avatar');
+  if (photoUrl) {
+    // Show photo in sidebar avatar
+    let img = sidebarAvatar.querySelector('.sidebar-avatar-img');
+    if (!img) {
+      img = document.createElement('img');
+      img.className = 'sidebar-avatar-img';
+      img.alt = 'Foto';
+      sidebarAvatar.appendChild(img);
+    }
+    img.src = photoUrl;
+    sidebarAvatar.textContent = '';
+    sidebarAvatar.appendChild(img);
+  } else {
+    // Show initial letter
+    const existingImg = sidebarAvatar.querySelector('.sidebar-avatar-img');
+    if (existingImg) existingImg.remove();
+    sidebarAvatar.textContent = (state.profile?.name || 'U')[0].toUpperCase();
+  }
 
   // Family section
   renderFamilySection();
@@ -3088,9 +3187,12 @@ function renderFamilySection() {
       const profile = state.familyProfiles?.[uid] || { name: 'Desconhecido', email: '' };
       const isMe = uid === state.user.uid;
       const initial = (profile.name || '?')[0].toUpperCase();
+      const avatarContent = profile.photoUrl 
+        ? `<img src="${profile.photoUrl}" alt="${profile.name}" class="member-avatar-img">` 
+        : '';
       return `
           <div style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--bg-tertiary);border-radius:8px;margin-bottom:8px;">
-            <div class="user-avatar" style="width:40px;height:40px;font-size:1rem;">${initial}</div>
+            <div class="user-avatar" style="width:40px;height:40px;font-size:1rem;position:relative;overflow:hidden;">${avatarContent || initial}</div>
             <div style="display:flex;flex-direction:column;">
               <span style="font-size:0.95rem;font-weight:600;">${profile.name} ${isMe ? '(você)' : ''}</span>
               <span style="font-size:0.8rem;color:var(--text-secondary);">${profile.email}</span>
@@ -3174,7 +3276,7 @@ function initNavigation() {
     if (select) {
       select.innerHTML = '<option value="">Nenhuma (usar valor manual)</option>';
       state.accounts.forEach(acc => {
-        select.innerHTML += `<option value="${acc.id}">${acc.name}</option>`;
+        select.innerHTML += `<option value="${acc.id}">${accLabel(acc)}</option>`;
       });
     }
 
@@ -3211,7 +3313,7 @@ function initNavigation() {
         if (targetSelect) {
           targetSelect.innerHTML = '<option value="">Selecione a conta de destino</option>';
           state.accounts.forEach(acc => {
-            targetSelect.innerHTML += `<option value="${acc.id}">${acc.name}</option>`;
+            targetSelect.innerHTML += `<option value="${acc.id}">${accLabel(acc)}</option>`;
           });
         }
         // Force specific category
@@ -3321,6 +3423,13 @@ function initNavigation() {
 
   // Profile form
   document.getElementById('profile-form')?.addEventListener('submit', handleProfileForm);
+
+  // Profile photo upload
+  document.getElementById('profile-photo-wrapper')?.addEventListener('click', () => {
+    document.getElementById('profile-photo-input')?.click();
+  });
+  document.getElementById('profile-photo-input')?.addEventListener('change', handleProfilePhotoUpload);
+  document.getElementById('profile-photo-remove-btn')?.addEventListener('click', handleProfilePhotoRemove);
 
   // Change password form
   document.getElementById('change-password-form')?.addEventListener('submit', handleChangePasswordForm);
@@ -3474,6 +3583,10 @@ function handleCompoundInterest(e) {
   document.getElementById('calculator-results').classList.remove('hidden');
 }
 
+function accLabel(acc) {
+  return acc.ownerTag ? `${acc.name} (${acc.ownerTag})` : acc.name;
+}
+
 function openTransactionModal() {
   const form = document.getElementById('transaction-form');
   form.reset();
@@ -3488,7 +3601,7 @@ function openTransactionModal() {
   const select = document.getElementById('tx-account');
   select.innerHTML = '<option value="">Selecione</option>';
   state.accounts.forEach(acc => {
-    select.innerHTML += `<option value="${acc.id}">${acc.name}</option>`;
+    select.innerHTML += `<option value="${acc.id}">${accLabel(acc)}</option>`;
   });
 
   // Reset type selector
@@ -3554,7 +3667,14 @@ function populateFixedBillDropdown() {
 async function handleTransactionForm(e) {
   e.preventDefault();
   const id = document.getElementById('tx-id').value;
-  const baseDate = new Date(document.getElementById('tx-date').value);
+  const dateStr = document.getElementById('tx-date').value;
+  let baseDate = new Date();
+  if (dateStr) {
+    const [year, month, day] = dateStr.split('-');
+    baseDate = new Date(year, parseInt(month) - 1, day);
+  } else {
+    baseDate = new Date();
+  }
   const amount = parseFloat(document.getElementById('tx-amount').value);
   const description = document.getElementById('tx-description').value.trim();
   const category = document.getElementById('tx-category').value.trim();
@@ -3943,6 +4063,7 @@ async function handleAccountForm(e) {
     familyId: state.familyId,
     createdBy: state.user.uid,
     name: document.getElementById('acc-name').value.trim(),
+    ownerTag: document.getElementById('acc-owner-tag')?.value.trim() || '',
     type,
     initialBalance: parseFloat(document.getElementById('acc-initial-balance').value) || 0,
     creditLimit: type === 'cartao_credito' ? (parseFloat(document.getElementById('acc-credit-limit').value) || 0) : null,
@@ -3959,7 +4080,7 @@ async function handleAccountForm(e) {
   const importSelect = document.getElementById('import-account-select');
   if (importSelect && !document.getElementById('import-preview')?.classList.contains('hidden')) {
     importSelect.innerHTML = '<option value="">Selecione uma conta...</option>' +
-      state.accounts.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
+      state.accounts.map(a => `<option value="${a.id}">${accLabel(a)}</option>`).join('');
     importSelect.value = savedId;
   }
 }
@@ -4002,6 +4123,108 @@ async function handleProfileForm(e) {
   state.profile.name = name;
   renderProfile();
   showToast('Perfil atualizado!', '', 'success');
+}
+
+// ---- Profile Photo Upload ----
+async function handleProfilePhotoUpload(e) {
+  const file = e.target.files?.[0];
+  if (!file) return;
+
+  // Validate file type
+  if (!file.type.startsWith('image/')) {
+    showToast('Arquivo inválido', 'Selecione um arquivo de imagem (JPG, PNG, etc).', 'error');
+    return;
+  }
+
+  // Validate file size (max 5MB before compression)
+  if (file.size > 5 * 1024 * 1024) {
+    showToast('Arquivo muito grande', 'A imagem deve ter no máximo 5MB.', 'error');
+    return;
+  }
+
+  try {
+    showToast('Processando...', 'Redimensionando e salvando sua foto.', 'info');
+
+    const dataUrl = await resizeAndCompressImage(file, 256, 0.8);
+
+    await saveUserProfile(state.user.uid, { photoUrl: dataUrl });
+    state.profile.photoUrl = dataUrl;
+
+    // Also update in familyProfiles so sidebar + member list reflect immediately
+    if (state.familyProfiles?.[state.user.uid]) {
+      state.familyProfiles[state.user.uid].photoUrl = dataUrl;
+    }
+
+    renderProfile();
+    showToast('Foto atualizada!', 'Sua foto de perfil foi salva com sucesso.', 'success');
+  } catch (err) {
+    console.error('Profile photo upload error:', err);
+    showToast('Erro ao salvar foto', err.message, 'error');
+  }
+
+  // Reset file input so same file can be re-selected
+  e.target.value = '';
+}
+
+async function handleProfilePhotoRemove() {
+  try {
+    await saveUserProfile(state.user.uid, { photoUrl: '' });
+    state.profile.photoUrl = '';
+
+    if (state.familyProfiles?.[state.user.uid]) {
+      state.familyProfiles[state.user.uid].photoUrl = '';
+    }
+
+    renderProfile();
+    showToast('Foto removida', 'Sua foto de perfil foi removida.', 'success');
+  } catch (err) {
+    console.error('Profile photo remove error:', err);
+    showToast('Erro ao remover foto', err.message, 'error');
+  }
+}
+
+/**
+ * Resizes an image file to max dimensions and compresses as JPEG base64.
+ * @param {File} file - The image file
+ * @param {number} maxSize - Max width/height in pixels
+ * @param {number} quality - JPEG quality (0-1)
+ * @returns {Promise<string>} - Data URL string
+ */
+function resizeAndCompressImage(file, maxSize, quality) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width;
+        let h = img.height;
+
+        // Scale down to fit within maxSize x maxSize
+        if (w > maxSize || h > maxSize) {
+          if (w > h) {
+            h = Math.round(h * (maxSize / w));
+            w = maxSize;
+          } else {
+            w = Math.round(w * (maxSize / h));
+            h = maxSize;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve(dataUrl);
+      };
+      img.onerror = () => reject(new Error('Não foi possível carregar a imagem.'));
+      img.src = ev.target.result;
+    };
+    reader.onerror = () => reject(new Error('Não foi possível ler o arquivo.'));
+    reader.readAsDataURL(file);
+  });
 }
 
 async function handleChangePasswordForm(e) {
@@ -4052,7 +4275,8 @@ window.editTransaction = (id) => {
   document.getElementById('tx-type').value = tx.type;
   document.getElementById('tx-paid').checked = tx.isPaid;
   const d = tx.date?.toDate ? tx.date.toDate() : new Date(tx.date);
-  document.getElementById('tx-date').value = d.toISOString().split('T')[0];
+  const tzOffset = d.getTimezoneOffset() * 60000;
+  document.getElementById('tx-date').value = new Date(d.getTime() - tzOffset).toISOString().split('T')[0];
   document.querySelectorAll('#tx-type-selector .sg-btn').forEach(b => b.classList.remove('active'));
   document.querySelector(`#tx-type-selector [data-value="${tx.type}"]`)?.classList.add('active');
   document.getElementById('transaction-modal-title').textContent = 'Editar Transação';
@@ -4070,6 +4294,7 @@ window.editAccount = (id) => {
   if (!acc) return;
   document.getElementById('acc-id').value = acc.id;
   document.getElementById('acc-name').value = acc.name;
+  if(document.getElementById('acc-owner-tag')) document.getElementById('acc-owner-tag').value = acc.ownerTag || '';
   document.getElementById('acc-type').value = acc.type;
   document.getElementById('acc-initial-balance').value = acc.initialBalance || 0;
   document.getElementById('acc-initial-adjustment').value = acc.initialAdjustment || 0;
@@ -4095,6 +4320,7 @@ window.editAccount = (id) => {
 document.getElementById('add-account-btn')?.addEventListener('click', () => {
   document.getElementById('account-form').reset();
   document.getElementById('acc-id').value = '';
+  if(document.getElementById('acc-owner-tag')) document.getElementById('acc-owner-tag').value = '';
   document.getElementById('acc-initial-adjustment').value = 0;
   const txAdjField = document.getElementById('acc-initial-adjustment-tx');
   if (txAdjField) txAdjField.value = 0;
@@ -4149,7 +4375,7 @@ window.editGoal = (id) => {
   if (select) {
     select.innerHTML = '<option value="">Nenhuma (usar valor manual)</option>';
     state.accounts.forEach(acc => {
-      select.innerHTML += `<option value="${acc.id}">${acc.name}</option>`;
+      select.innerHTML += `<option value="${acc.id}">${accLabel(acc)}</option>`;
     });
     select.value = g.linkedAccountId || '';
   }

@@ -567,6 +567,33 @@
     gap: var(--space-md);
   }
 }
+.account-card-enhanced .acc-logo-name {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.account-card-enhanced .bank-logo {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  object-fit: contain;
+  background: #fff;
+  padding: 4px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+  flex-shrink: 0;
+}
+.account-card-enhanced .bank-logo-fallback {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+}
 .account-card-enhanced .acc-name-area {
   display: flex;
   align-items: flex-start;

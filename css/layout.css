@@ -893,3 +893,103 @@ thead th {
   border-color: var(--primary-500);
   box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.1);
 }
+
+/* --- Profile Photo Upload --- */
+.profile-photo-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  margin-bottom: var(--space-xl);
+  padding: var(--space-lg) 0;
+}
+
+.profile-photo-wrapper {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  cursor: pointer;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(124, 58, 237, 0.25), 0 0 0 4px rgba(124, 58, 237, 0.15);
+  transition: all var(--transition-normal);
+}
+
+.profile-photo-wrapper:hover {
+  box-shadow: 0 6px 28px rgba(124, 58, 237, 0.35), 0 0 0 4px rgba(124, 58, 237, 0.25);
+  transform: scale(1.03);
+}
+
+.profile-photo-placeholder {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, var(--primary-600), var(--primary-700));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 2.5rem;
+  font-weight: 700;
+  letter-spacing: -1px;
+}
+
+.profile-photo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.profile-photo-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  backdrop-filter: blur(2px);
+}
+
+.profile-photo-overlay i {
+  font-size: 1.4rem;
+}
+
+.profile-photo-wrapper:hover .profile-photo-overlay {
+  opacity: 1;
+}
+
+/* Sidebar avatar with image */
+.user-info .user-avatar {
+  position: relative;
+  overflow: hidden;
+}
+
+.user-info .user-avatar .sidebar-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-radius: 50%;
+}
+
+/* Family member avatars with photo */
+.member-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  position: absolute;
+  top: 0;
+  left: 0;
+  border-radius: 50%;
+}

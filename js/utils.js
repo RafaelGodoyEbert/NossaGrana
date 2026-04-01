@@ -68,7 +68,9 @@ export function showToast(title, message, type = 'info') {
  * Obtém a data de hoje como string YYYY-MM-DD
  */
 export function todayString() {
-  return new Date().toISOString().split('T')[0];
+  const d = new Date();
+  const tzOffset = d.getTimezoneOffset() * 60000;
+  return new Date(d.getTime() - tzOffset).toISOString().split('T')[0];
 }
 
 /**

@@ -1019,9 +1019,14 @@ function renderDashboardWidgets(txs) {
     invoicesList.innerHTML = upcoming.slice(0, 5).map(t => {
       let d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
       return `
-      <div class="recent-tx-item" style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--border-color);">
-        <div style="font-size:0.85rem;"><strong>${t.description || t.category}</strong><br><small class="text-secondary" style="color:var(--text-secondary);">${d.toLocaleDateString('pt-BR')}</small></div>
-        <div style="font-weight:600; color:var(--expense-color);">- ${formatCurrency(t.amount)}</div>
+      <div class="recent-tx-item" style="display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid var(--border-color); gap:12px;">
+        <div style="font-size:0.85rem; flex:1; min-width:0;">
+          <div style="font-weight:600; color:var(--text-primary); line-height:1.2; margin-bottom:2px; overflow-wrap:break-word;">${t.description || t.category}</div>
+          <div style="font-size:0.75rem; color:var(--text-secondary); opacity:0.8;">${d.toLocaleDateString('pt-BR')}</div>
+        </div>
+        <div style="font-weight:700; color:var(--expense-color); font-size:0.9rem; white-space:nowrap; text-align:right;">
+          - ${formatCurrency(t.amount)}
+        </div>
       </div>`;
     }).join('');
   }

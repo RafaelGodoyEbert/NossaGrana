@@ -185,6 +185,30 @@
   th, td {
     padding: 8px 10px;
   }
+
+  /* Fix para as faturas espremidas na aba Contas a Pagar */
+  .payable-item {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 14px 12px;
+  }
+  .payable-item .tx-details {
+    min-width: calc(100% - 60px); /* Garante que fique ao lado do ícone, mas force quebra do restante */
+    margin-bottom: 4px;
+  }
+  .payable-item .tx-desc {
+    flex-wrap: wrap;
+    line-height: 1.4;
+  }
+  .payable-item .tx-amount {
+    margin-left: 44px; /* alinhar com icone */
+    text-align: left;
+    font-size: 1rem !important;
+    padding-right: 0 !important;
+  }
+  .payable-item .payable-actions {
+    margin-left: auto;
+  }
 }
 
 @media (max-width: 480px) {

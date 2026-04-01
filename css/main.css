@@ -384,3 +384,48 @@ input::placeholder, textarea::placeholder {
 [data-theme="dark"] #tx-installment-panel p {
   color: var(--text-muted);
 }
+
+/* --- Batch Categorize Modal --- */
+.batch-results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.batch-results-table thead {
+  background: var(--bg-tertiary);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.batch-results-table th {
+  padding: 10px 12px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+.batch-results-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: middle;
+}
+.batch-results-table tbody tr {
+  transition: background var(--transition-fast);
+}
+.batch-results-table tbody tr:hover {
+  background: var(--bg-tertiary);
+}
+.batch-results-table input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--primary-500);
+}
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 0.75rem;
+}

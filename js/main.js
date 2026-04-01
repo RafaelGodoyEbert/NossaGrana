@@ -2496,8 +2496,12 @@ function renderCategories() {
   // Find most used category
   const mostUsed = entries.length > 0 ? entries.reduce((best, curr) => curr[1].count > best[1].count ? curr : best) : null;
 
-  // Count importado
-  const importadoCount = state.transactions.filter(t => t.category === 'Importado').length;
+  // Count auto-categorizeable: 'Importado' + 'Transferência' (from OFX imports, not manual internal transfers)
+  const autoCatCandidates = state.transactions.filter(t => 
+    t.category === 'Importado' || 
+    (t.category === 'Transferência' && !(t.description || '').startsWith('➡️') && !(t.description || '').startsWith('⬅️'))
+  );
+  const importadoCount = autoCatCandidates.length;
 
   // Render summary cards
   summaryContainer.innerHTML = `
@@ -2570,9 +2574,174 @@ function renderCategories() {
   if (aiBtn) {
     if (importadoCount > 0) {
       aiBtn.style.display = '';
-      aiBtn.innerHTML = `<i class="fas fa-magic"></i> Auto Categorizar (${importadoCount} importadas)`;
+      aiBtn.innerHTML = `<i class="fas fa-magic"></i> Auto Categorizar (${importadoCount} pendentes)`;
     } else {
       aiBtn.style.display = 'none';
+    }
+  }
+}
+
+// ============================
+// Batch Categorize
+// ============================
+let _batchSearchResults = [];
+
+function openBatchCategorizeModal() {
+  // Reset modal state
+  const searchInput = document.getElementById('batch-search-input');
+  const resultsInfo = document.getElementById('batch-results-info');
+  const resultsContainer = document.getElementById('batch-results-container');
+  const actionPanel = document.getElementById('batch-action-panel');
+  const emptyState = document.getElementById('batch-empty-state');
+  const newCatInput = document.getElementById('batch-new-category');
+
+  if (searchInput) searchInput.value = '';
+  if (newCatInput) newCatInput.value = '';
+  if (resultsInfo) resultsInfo.classList.add('hidden');
+  if (resultsContainer) resultsContainer.classList.add('hidden');
+  if (actionPanel) actionPanel.classList.add('hidden');
+  if (emptyState) emptyState.style.display = '';
+  _batchSearchResults = [];
+
+  populateCategoryDatalist();
+  openModal('batch-categorize-modal');
+
+  // Focus search after modal opens
+  setTimeout(() => searchInput?.focus(), 200);
+}
+
+function searchBatchTransactions(query) {
+  const resultsInfo = document.getElementById('batch-results-info');
+  const resultsContainer = document.getElementById('batch-results-container');
+  const actionPanel = document.getElementById('batch-action-panel');
+  const emptyState = document.getElementById('batch-empty-state');
+  const tbody = document.getElementById('batch-results-tbody');
+  const countEl = document.getElementById('batch-results-count');
+  const applyCountEl = document.getElementById('batch-apply-count');
+
+  if (!query || query.length < 2) {
+    if (resultsInfo) resultsInfo.classList.add('hidden');
+    if (resultsContainer) resultsContainer.classList.add('hidden');
+    if (actionPanel) actionPanel.classList.add('hidden');
+    if (emptyState) emptyState.style.display = '';
+    _batchSearchResults = [];
+    return;
+  }
+
+  const q = query.toLowerCase();
+  _batchSearchResults = state.transactions.filter(t =>
+    (t.description || '').toLowerCase().includes(q)
+  );
+
+  if (_batchSearchResults.length === 0) {
+    if (resultsInfo) resultsInfo.classList.add('hidden');
+    if (resultsContainer) resultsContainer.classList.add('hidden');
+    if (actionPanel) actionPanel.classList.add('hidden');
+    if (emptyState) {
+      emptyState.style.display = '';
+      emptyState.innerHTML = `
+        <i class="fas fa-search" style="font-size:2rem;margin-bottom:var(--space-sm);opacity:0.5;"></i>
+        <p>Nenhuma transação encontrada com "${query}".</p>
+      `;
+    }
+    return;
+  }
+
+  // Calculate total
+  const totalAmount = _batchSearchResults.reduce((sum, t) => {
+    return t.type === 'receita' ? sum + t.amount : sum - t.amount;
+  }, 0);
+
+  if (emptyState) emptyState.style.display = 'none';
+  if (resultsInfo) {
+    resultsInfo.classList.remove('hidden');
+    resultsInfo.style.display = 'flex';
+  }
+  if (resultsContainer) resultsContainer.classList.remove('hidden');
+  if (actionPanel) actionPanel.classList.remove('hidden');
+
+  if (countEl) {
+    countEl.innerHTML = `<i class="fas fa-check-circle" style="color:var(--success-color);margin-right:4px;"></i>${_batchSearchResults.length} transações encontradas — Total: ${formatCurrency(Math.abs(totalAmount))}`;
+  }
+  if (applyCountEl) applyCountEl.textContent = _batchSearchResults.length;
+
+  // Render results table
+  if (tbody) {
+    const sorted = [..._batchSearchResults].sort((a, b) => (b.date?.seconds || 0) - (a.date?.seconds || 0));
+    tbody.innerHTML = sorted.map(t => {
+      const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+      return `
+        <tr>
+          <td><input type="checkbox" class="batch-tx-checkbox" data-tx-id="${t.id}" checked></td>
+          <td style="white-space:nowrap;font-size:0.8rem;">${d.toLocaleDateString('pt-BR')}</td>
+          <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.85rem;" title="${t.description}">${t.description}</td>
+          <td><span style="font-size:0.75rem;padding:2px 8px;border-radius:12px;background:var(--bg-tertiary);">${t.category || 'Sem categoria'}</span></td>
+          <td class="${t.type}" style="white-space:nowrap;font-size:0.85rem;">${formatCurrency(t.amount)}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  // Check all by default
+  const checkAll = document.getElementById('batch-check-all');
+  if (checkAll) checkAll.checked = true;
+
+  updateBatchApplyCount();
+}
+
+function updateBatchApplyCount() {
+  const checked = document.querySelectorAll('.batch-tx-checkbox:checked');
+  const applyCountEl = document.getElementById('batch-apply-count');
+  if (applyCountEl) applyCountEl.textContent = checked.length;
+}
+
+async function applyBatchCategory() {
+  const newCategory = document.getElementById('batch-new-category')?.value?.trim();
+  if (!newCategory) {
+    showToast('Categoria obrigatória', 'Informe a nova categoria para aplicar.', 'warning');
+    return;
+  }
+
+  const checkedBoxes = document.querySelectorAll('.batch-tx-checkbox:checked');
+  const selectedIds = Array.from(checkedBoxes).map(cb => cb.dataset.txId);
+
+  if (selectedIds.length === 0) {
+    showToast('Nenhuma selecionada', 'Selecione pelo menos uma transação.', 'warning');
+    return;
+  }
+
+  const btn = document.getElementById('batch-apply-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Aplicando...';
+  }
+
+  try {
+    let updated = 0;
+    for (const txId of selectedIds) {
+      const tx = state.transactions.find(t => t.id === txId);
+      if (tx) {
+        await saveTransaction({ category: newCategory }, txId);
+        tx.category = newCategory;
+        updated++;
+      }
+    }
+
+    showToast(
+      `${updated} transações atualizadas!`,
+      `Categoria alterada para "${newCategory}".`,
+      'success'
+    );
+
+    closeModal('batch-categorize-modal');
+    await loadAllData();
+  } catch (err) {
+    console.error('Batch categorize error:', err);
+    showToast('Erro', 'Não foi possível aplicar a categoria em lote.', 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-check-double"></i> Aplicar Categoria a <span id="batch-apply-count">0</span> transações';
     }
   }
 }
@@ -2581,9 +2750,13 @@ function renderCategories() {
 // AI Auto-Categorize
 // ============================
 async function handleAIAutoCategorize() {
-  const importedTxs = state.transactions.filter(t => t.category === 'Importado');
+  // Include 'Importado' AND 'Transferência' (from OFX imports, not manual internal transfers)
+  const importedTxs = state.transactions.filter(t => 
+    t.category === 'Importado' || 
+    (t.category === 'Transferência' && !(t.description || '').startsWith('➡️') && !(t.description || '').startsWith('⬅️'))
+  );
   if (importedTxs.length === 0) {
-    showToast('Nada para categorizar', 'Não há transações com categoria "Importado".', 'info');
+    showToast('Nada para categorizar', 'Não há transações com categoria "Importado" ou "Transferência" importada.', 'info');
     return;
   }
 
@@ -2692,8 +2865,9 @@ async function handleAIAutoCategorize() {
         btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Categorizando... (chunk ${ci + 1}/${chunks.length})`;
       }
 
-      const prompt = `Categorize estas transações financeiras. Use as categorias existentes quando possível: ${existingCats.join(', ')}.
+      const prompt = `Categorize estas transações financeiras brasileiras. Use as categorias existentes quando possível: ${existingCats.join(', ')}.
 Se nenhuma servir, crie uma curta em português.
+NOTA: Transações que contêm "Transferência enviada pelo Pix" ou similares são pagamentos PIX a terceiros — NÃO categorize como "Transferência" ou "Transferência Interna". Analise o NOME do destinatário para determinar a categoria real (ex: academia = Saúde, restaurante = Alimentação, etc).
 
 Transações:
 ${chunks[ci]}
@@ -3107,6 +3281,43 @@ function initNavigation() {
   });
   document.getElementById('cat-period-filter')?.addEventListener('change', renderCategories);
   document.getElementById('ai-auto-categorize-btn')?.addEventListener('click', handleAIAutoCategorize);
+  document.getElementById('batch-categorize-btn')?.addEventListener('click', openBatchCategorizeModal);
+
+  // Batch categorize modal events
+  const batchSearchInput = document.getElementById('batch-search-input');
+  let _batchSearchTimeout = null;
+  batchSearchInput?.addEventListener('input', (e) => {
+    clearTimeout(_batchSearchTimeout);
+    _batchSearchTimeout = setTimeout(() => searchBatchTransactions(e.target.value.trim()), 300);
+  });
+
+  document.getElementById('batch-check-all')?.addEventListener('change', (e) => {
+    document.querySelectorAll('.batch-tx-checkbox').forEach(cb => cb.checked = e.target.checked);
+    updateBatchApplyCount();
+  });
+
+  document.getElementById('batch-select-all-btn')?.addEventListener('click', () => {
+    document.querySelectorAll('.batch-tx-checkbox').forEach(cb => cb.checked = true);
+    const checkAll = document.getElementById('batch-check-all');
+    if (checkAll) checkAll.checked = true;
+    updateBatchApplyCount();
+  });
+
+  document.getElementById('batch-deselect-all-btn')?.addEventListener('click', () => {
+    document.querySelectorAll('.batch-tx-checkbox').forEach(cb => cb.checked = false);
+    const checkAll = document.getElementById('batch-check-all');
+    if (checkAll) checkAll.checked = false;
+    updateBatchApplyCount();
+  });
+
+  document.getElementById('batch-apply-btn')?.addEventListener('click', applyBatchCategory);
+
+  // Delegate change events for batch checkboxes (dynamic elements)
+  document.getElementById('batch-results-tbody')?.addEventListener('change', (e) => {
+    if (e.target.classList.contains('batch-tx-checkbox')) {
+      updateBatchApplyCount();
+    }
+  });
 
   // Profile form
   document.getElementById('profile-form')?.addEventListener('submit', handleProfileForm);
@@ -3413,11 +3624,17 @@ async function handleTransactionForm(e) {
         return;
       }
 
-      // 1. Despesa na Origem
+      const originAcc = state.accounts.find(a => a.id === accountId);
+      const targetAcc = state.accounts.find(a => a.id === targetAccountId);
+
+      // 1. Despesa na Origem (Atribuído ao dono da conta de origem)
+      const outCreatedBy = originAcc?.createdBy || state.user.uid;
+      const outCreatedByName = state.familyProfiles?.[outCreatedBy]?.name || state.profile?.name || 'Usuário';
+
       const outData = {
         familyId: state.familyId,
-        createdBy: state.user.uid,
-        createdByName: state.profile?.name || 'Usuário',
+        createdBy: outCreatedBy,
+        createdByName: outCreatedByName,
         type: 'despesa',
         description: `➡️ Transf: ${description}`,
         amount: thisAmount,
@@ -3428,11 +3645,14 @@ async function handleTransactionForm(e) {
       };
       await saveTransaction(outData, null);
 
-      // 2. Receita no Destino
+      // 2. Receita no Destino (Atribuído ao dono da conta de destino)
+      const inCreatedBy = targetAcc?.createdBy || state.user.uid;
+      const inCreatedByName = state.familyProfiles?.[inCreatedBy]?.name || state.profile?.name || 'Usuário';
+
       const inData = {
         familyId: state.familyId,
-        createdBy: state.user.uid,
-        createdByName: state.profile?.name || 'Usuário',
+        createdBy: inCreatedBy,
+        createdByName: inCreatedByName,
         type: 'receita',
         description: `⬅️ Transf: ${description}`,
         amount: thisAmount,

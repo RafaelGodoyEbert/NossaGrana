@@ -578,9 +578,14 @@
         <section id="categories-page" class="page hidden">
           <div class="actions-bar">
             <h2><i class="fas fa-tags"></i> Categorias</h2>
-            <button class="btn btn-secondary" id="ai-auto-categorize-btn" title="Usar IA para re-categorizar transações 'Importado'">
-              <i class="fas fa-magic"></i> Auto Categorizar (IA)
-            </button>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button class="btn btn-primary" id="batch-categorize-btn" title="Categorizar múltiplas transações por descrição">
+                <i class="fas fa-layer-group"></i> Categorizar em Lote
+              </button>
+              <button class="btn btn-secondary" id="ai-auto-categorize-btn" title="Usar IA para re-categorizar transações 'Importado' e 'Transferência'">
+                <i class="fas fa-magic"></i> Auto Categorizar (IA)
+              </button>
+            </div>
           </div>
           <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:var(--space-md);">Todas as categorias extraídas das suas transações, com totais do período selecionado.</p>
 
@@ -1099,6 +1104,66 @@
           <i class="fas fa-check"></i> Salvar Conta Fixa
         </button>
       </form>
+    </div>
+  </div>
+
+  <!-- Batch Categorize Modal -->
+  <div id="batch-categorize-modal" class="modal-container hidden">
+    <div class="modal-content" style="max-width:700px;">
+      <button class="modal-close-btn" onclick="closeModal('batch-categorize-modal')">&times;</button>
+      <h3><i class="fas fa-layer-group"></i> Categorizar em Lote</h3>
+      <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:var(--space-md);">Busque transações por descrição e aplique uma nova categoria a todas de uma vez.</p>
+
+      <!-- Search -->
+      <div class="form-group">
+        <label for="batch-search-input">Buscar por descrição</label>
+        <div class="search-wrapper" style="margin:0;">
+          <i class="fas fa-search search-icon"></i>
+          <input type="text" id="batch-search-input" placeholder="Ex: Union Team, Uber, Netflix..." autocomplete="off">
+        </div>
+      </div>
+
+      <!-- Results info -->
+      <div id="batch-results-info" class="hidden" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-sm);flex-wrap:wrap;gap:8px;">
+        <span id="batch-results-count" style="font-size:0.9rem;font-weight:600;"></span>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-sm btn-secondary" id="batch-select-all-btn">Selecionar Todas</button>
+          <button class="btn btn-sm btn-secondary" id="batch-deselect-all-btn">Desmarcar Todas</button>
+        </div>
+      </div>
+
+      <!-- Results table -->
+      <div id="batch-results-container" class="hidden" style="max-height:280px;overflow-y:auto;border:1px solid var(--border-color);border-radius:var(--border-radius);margin-bottom:var(--space-md);">
+        <table class="batch-results-table">
+          <thead>
+            <tr>
+              <th style="width:40px;"><input type="checkbox" id="batch-check-all" checked></th>
+              <th>Data</th>
+              <th>Descrição</th>
+              <th>Categoria Atual</th>
+              <th>Valor</th>
+            </tr>
+          </thead>
+          <tbody id="batch-results-tbody"></tbody>
+        </table>
+      </div>
+
+      <!-- Category selector -->
+      <div id="batch-action-panel" class="hidden" style="background:var(--bg-tertiary);border-radius:var(--border-radius);padding:var(--space-md);">
+        <div class="form-group" style="margin-bottom:var(--space-sm);">
+          <label for="batch-new-category">Nova Categoria</label>
+          <input type="text" id="batch-new-category" list="category-suggestions" placeholder="Saúde, Alimentação, Lazer/Assinaturas..." autocomplete="off">
+        </div>
+        <button class="btn btn-primary" id="batch-apply-btn" style="width:100%;">
+          <i class="fas fa-check-double"></i> Aplicar Categoria a <span id="batch-apply-count">0</span> transações
+        </button>
+      </div>
+
+      <!-- Empty state -->
+      <div id="batch-empty-state" style="text-align:center;padding:var(--space-xl);color:var(--text-secondary);">
+        <i class="fas fa-search" style="font-size:2rem;margin-bottom:var(--space-sm);opacity:0.5;"></i>
+        <p>Digite uma descrição acima para buscar transações.</p>
+      </div>
     </div>
   </div>
 

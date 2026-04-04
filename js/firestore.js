@@ -1,5 +1,5 @@
-// js/firestore.js — CRUD com suporte a familyId
 import { db } from '../firebase-config.js';
+import { notifyPartner } from './notifications.js';
 
 // ============================
 // Estado Local (Demo Mode)
@@ -91,7 +91,17 @@ async function deleteDoc(collection, docId) {
 // ============================
 // Transactions
 // ============================
-export const saveTransaction = (data, docId) => saveDoc('transactions', data, docId);
+export const saveTransaction = async (data, docId) => {
+  const id = await saveDoc('transactions', data, docId);
+  if (!docId && data.familyId && data.createdBy) {
+    notifyPartner(data.familyId, data.createdBy, {
+      title: data.type === 'receita' ? 'Nova Receita' : 'Nova Despesa',
+      body: `${data.createdByName || 'O parceiro'} adicionou uma ${data.type} de R$ ${data.amount}.`,
+      type: 'transaction'
+    });
+  }
+  return id;
+};
 export const deleteTransaction = (docId) => deleteDoc('transactions', docId);
 
 /**

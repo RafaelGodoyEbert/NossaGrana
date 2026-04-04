@@ -13,6 +13,7 @@ import { initChat } from './chat/chat-ui.js';
 import { initImport } from './import-ofx.js';
 import { getGeminiKey } from './chat/ai-gemini.js';
 import { getOpenAIKey } from './chat/ai-openai.js';
+import { listenNotifications, requestNotificationPermission, markAsRead, notifyPartner } from './notifications.js';
 
 // ============================
 // App State
@@ -265,6 +266,13 @@ async function onUserLoggedIn(user, isDemo = false) {
   state.family = await getFamily(state.familyId);
   showMainApp();
   await loadAllData();
+
+  if (!isDemo) {
+    if (await requestNotificationPermission()) {
+      console.log('Permissão de notificação concedida');
+    }
+    listenNotifications(state.user.uid, renderNotifications);
+  }
 }
 
 // ============================
@@ -358,6 +366,11 @@ window.payCurrentInvoice = async function(accountId) {
     }
 
     showToast('Fatura Paga! ✅', `${txsInCycle.length} transações liquidadas — ${formatCurrency(Math.abs(total))}`, 'success');
+    notifyPartner(state.familyId, state.user.uid, {
+      title: 'Fatura Paga',
+      body: `${state.profile?.name || 'O parceiro'} pagou a fatura do cartão "${acc.name}".`,
+      type: 'info'
+    });
     await loadAllData();
   } catch (err) {
     console.error('Erro ao pagar fatura:', err);
@@ -413,6 +426,11 @@ window.paySpecificInvoice = async function(accountId, cycleKey) {
     }
 
     showToast('Fatura Paga! ✅', `${txsInCycle.length} transações liquidadas — ${formatCurrency(Math.abs(total))}`, 'success');
+    notifyPartner(state.familyId, state.user.uid, {
+      title: 'Fatura Paga',
+      body: `${state.profile?.name || 'O parceiro'} pagou a fatura isolada do cartão "${acc.name}".`,
+      type: 'info'
+    });
     
     // Fecha o modal caso esteja aberto dessa fatura específica
     const modal = document.getElementById('invoice-modal');
@@ -2262,19 +2280,8 @@ function renderReports() {
   // Get selected year/month
   const yearSelect = document.getElementById('report-year-filter');
   const monthSelect = document.getElementById('report-month-filter');
-  const selectedYear = yearSelect ? parseInt(yearSelect.value) : new Date().getFullYear();
+  const selectedYear = yearSelect ? yearSelect.value : new Date().getFullYear().toString();
   const selectedMonth = monthSelect ? monthSelect.value : 'all';
-
-  // Build date range from year/month
-  let start, end;
-  if (selectedMonth === 'all') {
-    start = new Date(selectedYear, 0, 1);
-    end = new Date(selectedYear, 11, 31, 23, 59, 59);
-  } else {
-    const m = parseInt(selectedMonth);
-    start = new Date(selectedYear, m, 1);
-    end = new Date(selectedYear, m + 1, 0, 23, 59, 59);
-  }
 
   // Filter all transactions (not just expenses)
   let allTxs = state.transactions.filter(t => t.category !== 'Transferência Interna');
@@ -2283,7 +2290,13 @@ function renderReports() {
 
   const periodTxs = allTxs.filter(t => {
     const td = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-    return td >= start && td <= end;
+    const tYear = td.getFullYear();
+    const tMonth = td.getMonth();
+
+    const yearMatch = (selectedYear === 'all' || tYear === parseInt(selectedYear));
+    const monthMatch = (selectedMonth === 'all' || tMonth === parseInt(selectedMonth));
+
+    return yearMatch && monthMatch;
   });
 
   const periodExpenses = periodTxs.filter(t => t.type === 'despesa');
@@ -2449,22 +2462,25 @@ function populateReportFilters() {
   const monthSelect = document.getElementById('report-month-filter');
   if (!yearSelect || !monthSelect) return;
 
-  // Gather years from transactions
+  // Gather years from transactions (excluding future years)
   const years = new Set();
   const now = new Date();
-  years.add(now.getFullYear());
+  const currYear = now.getFullYear();
+  years.add(currYear);
 
   state.transactions.forEach(t => {
     const td = t.date?.toDate ? t.date.toDate() : new Date(t.date);
-    years.add(td.getFullYear());
+    const y = td.getFullYear();
+    if (y <= currYear) years.add(y);
   });
 
   const sortedYears = [...years].sort((a, b) => b - a);
-  const currentYear = yearSelect.value ? parseInt(yearSelect.value) : now.getFullYear();
+  const currentYearVal = yearSelect.value || currYear.toString();
 
-  yearSelect.innerHTML = sortedYears.map(y =>
-    `<option value="${y}" ${y === currentYear ? 'selected' : ''}>${y}</option>`
-  ).join('');
+  yearSelect.innerHTML = '<option value="all"' + (currentYearVal === 'all' ? ' selected' : '') + '>Todos os Anos</option>' +
+    sortedYears.map(y =>
+      `<option value="${y}" ${String(y) === currentYearVal ? 'selected' : ''}>${y}</option>`
+    ).join('');
 
   // Month dropdown
   const currentMonth = monthSelect.value || 'all';
@@ -5215,6 +5231,65 @@ function init() {
   initNavigation();
   initAuth();
   initPWAInfo();
+  initNotificationsUI();
+}
+
+// ============================
+// Notifications UI Hook
+// ============================
+function initNotificationsUI() {
+  const panel = document.getElementById('notifications-panel');
+  document.getElementById('notifications-btn')?.addEventListener('click', () => {
+    panel.classList.toggle('hidden');
+    // Marcar visiveis como lidas
+    if (!panel.classList.contains('hidden') && state.user?.uid) {
+      markAsRead(null, state.user.uid);
+    }
+  });
+  document.getElementById('close-notifications-btn')?.addEventListener('click', () => {
+    panel.classList.add('hidden');
+  });
+}
+
+function renderNotifications(notifications, hasNewUnread) {
+  state.notifications = notifications;
+  const badge = document.getElementById('notifications-badge');
+  const panel = document.getElementById('notifications-panel');
+  
+  if (hasNewUnread || notifications.some(n => !n.isRead)) {
+    badge.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden');
+  }
+
+  const listEl = document.getElementById('notifications-list');
+  if (notifications.length === 0) {
+    listEl.innerHTML = `
+      <div class="empty-state" style="padding: 30px 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;">
+        <i class="fas fa-check-circle" style="font-size: 2.5rem; color: var(--primary-200); opacity: 0.5;"></i>
+        <p style="text-align:center; color: var(--text-secondary); margin: 0; font-size: 0.9rem;">Nenhuma notificação por enquanto.</p>
+      </div>`;
+    return;
+  }
+
+  listEl.innerHTML = notifications.map(n => `
+    <div class="notification-item ${n.isRead ? '' : 'unread'}" data-id="${n.id}">
+      <div class="notification-title">${n.title}</div>
+      <div class="notification-body">${n.body}</div>
+      <span class="notification-time">${formatDate(n.createdAt?.toDate ? n.createdAt.toDate() : new Date(n.createdAt))}</span>
+    </div>
+  `).join('');
+
+  listEl.querySelectorAll('.notification-item').forEach(el => {
+    el.addEventListener('click', async (e) => {
+      const id = e.currentTarget.dataset.id;
+      const notif = notifications.find(x => x.id === id);
+      if (notif && !notif.isRead) {
+        await markAsRead(id);
+      }
+      panel.classList.add('hidden');
+    });
+  });
 }
 
 document.addEventListener('DOMContentLoaded', init);

@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NossaGrana — Finanças do Casal</title>
   <meta name="description" content="Controle financeiro para casais. Gerencie suas finanças juntos com chat inteligente.">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💜</text></svg>">
+  <link rel="icon" type="image/png" href="icon-192.png">
+  <link rel="apple-touch-icon" href="icon-192.png">
   <link rel="manifest" href="manifest.json">
 
   <!-- Font Awesome -->
@@ -194,7 +195,10 @@
           </div>
           <div class="header-right">
             <button class="theme-toggle" id="theme-toggle" title="Alternar tema"></button>
-            <button class="btn-icon" id="notifications-btn" title="Notificações"><i class="fas fa-bell"></i></button>
+            <button class="btn-icon" id="notifications-btn" title="Notificações" style="position:relative;">
+              <i class="fas fa-bell"></i>
+              <span id="notifications-badge" class="notification-badge hidden"></span>
+            </button>
           </div>
         </header>
 
@@ -821,6 +825,20 @@
 
       <!-- FAB -->
       <button class="fab" id="fab-btn" title="Nova Transação"><i class="fas fa-plus"></i></button>
+
+      <!-- Notifications Panel (Off-canvas) -->
+      <div id="notifications-panel" class="notifications-panel hidden">
+        <div class="notifications-header">
+          <h3><i class="fas fa-bell"></i> Notificações</h3>
+          <button id="close-notifications-btn"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="notifications-body" id="notifications-list">
+          <div class="empty-state" style="padding: 30px 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;">
+            <i class="fas fa-check-circle" style="font-size: 2.5rem; color: var(--primary-200); opacity: 0.5;"></i>
+            <p style="text-align:center; color: var(--text-secondary); margin: 0; font-size: 0.9rem;">Nenhuma notificação por enquanto.</p>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 

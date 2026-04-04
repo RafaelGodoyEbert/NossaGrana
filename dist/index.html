@@ -1,0 +1,1231 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NossaGrana — Finanças do Casal</title>
+  <meta name="description" content="Controle financeiro para casais. Gerencie suas finanças juntos com chat inteligente.">
+  <link rel="icon" type="image/png" href="/NossaGrana/assets/icon-192-BUFtzE48.png">
+  <link rel="apple-touch-icon" href="/NossaGrana/assets/icon-192-BUFtzE48.png">
+  <link rel="manifest" href="manifest.json">
+
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+  <!-- CSS -->
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script type="module" crossorigin src="/NossaGrana/assets/index-D3jka05f.js"></script>
+  <link rel="stylesheet" crossorigin href="/NossaGrana/assets/index-p4OU4ik4.css">
+</head>
+<body>
+  <!-- Toast Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Loader -->
+  <div id="loader" class="loader-container">
+    <div class="loader-spinner"></div>
+    <span class="loader-text">Carregando NossaGrana...</span>
+  </div>
+
+  <div id="app" class="app-container">
+
+    <!-- ============ AUTH SCREEN ============ -->
+    <div id="auth-container" class="auth-container">
+      <section class="auth-hero">
+        <div class="auth-card">
+          <div class="auth-card-header">
+            <div class="logo-emoji">💜</div>
+            <h1>NossaGrana</h1>
+            <p>Finanças do casal em um só lugar</p>
+          </div>
+
+          <!-- Login -->
+          <form id="login-form" class="auth-form">
+            <div class="form-group">
+              <input type="email" id="login-email" placeholder="Seu email" required autocomplete="email">
+            </div>
+            <div class="form-group">
+              <div class="password-wrapper">
+                <input type="password" id="login-password" placeholder="Sua senha" required autocomplete="current-password">
+                <button type="button" class="password-toggle" onclick="togglePassword('login-password', this)"><i class="fas fa-eye"></i></button>
+              </div>
+              <div style="text-align: right; margin-top: 8px;">
+                <a href="#" id="show-forgot-password" style="font-size: 0.85rem; color: var(--primary-color);">Esqueceu a senha?</a>
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary"><i class="fas fa-sign-in-alt"></i> Entrar</button>
+            <div class="auth-divider">ou</div>
+
+            <!-- Invite Code -->
+            <div class="invite-section">
+              <h4>💌 Recebeu um convite?</h4>
+              <div class="invite-input-group">
+                <input type="text" id="invite-code-input" placeholder="Código de 6 dígitos" maxlength="6">
+                <button type="button" class="btn btn-secondary" id="join-invite-btn"><i class="fas fa-link"></i> Entrar</button>
+              </div>
+            </div>
+
+            <p class="auth-toggle">Não tem conta? <a href="#" id="show-register">Registre-se</a></p>
+            <p id="auth-error" class="auth-error"></p>
+          </form>
+
+          <!-- Forgot Password -->
+          <form id="forgot-password-form" class="auth-form hidden">
+            <h3 style="margin-bottom: 16px; font-size: 1.2rem; text-align: center;">Recuperar Senha</h3>
+            <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 16px; text-align: center;">Enviaremos um link para você redefinir sua senha.</p>
+            <div class="form-group">
+              <input type="email" id="forgot-password-email" placeholder="Seu email cadastrado" required autocomplete="email">
+            </div>
+            <button type="submit" class="btn btn-primary"><i class="fas fa-paper-plane"></i> Enviar Link</button>
+            <p class="auth-toggle"><a href="#" id="forgot-password-back">Voltar para o Login</a></p>
+            <p id="forgot-password-error" class="auth-error"></p>
+          </form>
+
+          <!-- Register -->
+          <form id="register-form" class="auth-form hidden">
+            <div class="form-group">
+              <input type="text" id="register-name" placeholder="Seu nome" required>
+            </div>
+            <div class="form-group">
+              <input type="email" id="register-email" placeholder="Seu email" required autocomplete="email">
+            </div>
+            <div class="form-group">
+              <div class="password-wrapper">
+                <input type="password" id="register-password" placeholder="Senha (mín. 6 caracteres)" required minlength="6">
+                <button type="button" class="password-toggle" onclick="togglePassword('register-password', this)"><i class="fas fa-eye"></i></button>
+              </div>
+            </div>
+            <div class="form-group">
+              <div class="password-wrapper">
+                <input type="password" id="register-confirm" placeholder="Confirme a senha" required minlength="6">
+                <button type="button" class="password-toggle" onclick="togglePassword('register-confirm', this)"><i class="fas fa-eye"></i></button>
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary"><i class="fas fa-user-plus"></i> Criar Conta</button>
+            <p class="auth-toggle">Já tem conta? <a href="#" id="show-login">Faça Login</a></p>
+            <p id="register-error" class="auth-error"></p>
+          </form>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============ SETUP SCREEN (FOR BYOK / GITHUB PAGES) ============ -->
+    <div id="setup-container" class="auth-container hidden">
+      <section class="auth-hero">
+        <div class="auth-card" style="max-width: 500px;">
+          <div class="auth-card-header">
+            <div class="logo-emoji">⚙️</div>
+            <h1>Configurar Firebase</h1>
+            <p>Seu app está quase pronto! Cole suas chaves do Firebase aqui para começar.</p>
+          </div>
+          <form id="setup-form" class="auth-form">
+            <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 16px;">
+              Essas chaves são encontradas no console do Firebase (Configurações do Projeto > Seus Apps).
+              Elas ficarão salvas apenas no <strong>seu navegador</strong>.
+            </p>
+            <div class="form-group"><input type="text" id="setup-api-key" placeholder="API Key" required></div>
+            <div class="form-group"><input type="text" id="setup-auth-domain" placeholder="Auth Domain" required></div>
+            <div class="form-group"><input type="text" id="setup-project-id" placeholder="Project ID" required></div>
+            <div class="form-group"><input type="text" id="setup-storage-bucket" placeholder="Storage Bucket" required></div>
+            <div class="form-group"><input type="text" id="setup-messaging-sender-id" placeholder="Messaging Sender ID" required></div>
+            <div class="form-group"><input type="text" id="setup-app-id" placeholder="App ID" required></div>
+            
+            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar e Reiniciar</button>
+            <p style="text-align: center; margin-top: 16px; font-size: 0.75rem;"><a href="https://console.firebase.google.com/" target="_blank">Abrir Console do Firebase <i class="fas fa-external-link-alt"></i></a></p>
+          </form>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============ MAIN APP ============ -->
+    <div id="main-content" class="main-content hidden">
+
+      <!-- Sidebar Overlay -->
+      <div id="sidebar-overlay" class="sidebar-overlay hidden"></div>
+
+      <!-- Sidebar -->
+      <nav id="sidebar" class="sidebar">
+        <div class="sidebar-header">
+          <span class="sidebar-logo">💜</span>
+          <h2 class="sidebar-title">NossaGrana</h2>
+        </div>
+        <ul class="sidebar-menu">
+          <li><a href="#" class="nav-link active" data-page="dashboard"><i class="fas fa-chart-pie"></i> Dashboard</a></li>
+          <li><a href="#" class="nav-link" data-page="transactions"><i class="fas fa-exchange-alt"></i> Transações</a></li>
+          <li><a href="#" class="nav-link" data-page="accounts"><i class="fas fa-wallet"></i> Contas</a></li>
+          <li><a href="#" class="nav-link" data-page="chat"><i class="fas fa-robot"></i> Assistente IA</a></li>
+          <li><a href="#" class="nav-link" data-page="categories"><i class="fas fa-tags"></i> Categorias</a></li>
+          <li><a href="#" class="nav-link" data-page="payables"><i class="fas fa-file-invoice-dollar"></i> Contas a Pagar</a></li>
+          <li><a href="#" class="nav-link" data-page="planning"><i class="fas fa-bullseye"></i> Planejamento</a></li>
+          <li><a href="#" class="nav-link" data-page="reports"><i class="fas fa-chart-bar"></i> Relatórios</a></li>
+          <li><a href="#" class="nav-link" data-page="import"><i class="fas fa-file-import"></i> Importar Extrato</a></li>
+          <li><a href="#" class="nav-link" data-page="tools"><i class="fas fa-tools"></i> Ferramentas</a></li>
+          <li><a href="#" class="nav-link" data-page="profile"><i class="fas fa-user-cog"></i> Perfil & Família</a></li>
+        </ul>
+        <div class="sidebar-footer">
+          <div class="user-info">
+            <div class="user-avatar" id="sidebar-avatar">R</div>
+            <div class="user-details">
+              <div class="user-name" id="sidebar-name">Usuário</div>
+              <div class="user-role" id="sidebar-role">Administrador</div>
+            </div>
+          </div>
+          <button id="logout-btn"><i class="fas fa-sign-out-alt"></i> Sair</button>
+        </div>
+      </nav>
+
+      <!-- Page Content -->
+      <main class="page-content">
+        <!-- Header -->
+        <header class="app-header">
+          <div class="header-left">
+            <button class="menu-toggle-btn" id="menu-toggle-btn"><i class="fas fa-bars"></i></button>
+            <h2 id="page-title">Dashboard</h2>
+          </div>
+          <div class="header-right">
+            <button class="theme-toggle" id="theme-toggle" title="Alternar tema"></button>
+            <button class="btn-icon" id="notifications-btn" title="Notificações" style="position:relative;">
+              <i class="fas fa-bell"></i>
+              <span id="notifications-badge" class="notification-badge hidden"></span>
+            </button>
+          </div>
+        </header>
+
+        <!-- ===== DASHBOARD ===== -->
+        <section id="dashboard-page" class="page">
+          <div class="couple-filter">
+            <button class="filter-btn active" data-filter="all">👫 Total do Casal</button>
+            <button class="filter-btn" data-filter="mine">Meus Gastos</button>
+            <button class="filter-btn" data-filter="partner">Gastos do(a) Parceiro(a)</button>
+          </div>
+
+          <div class="summary-cards">
+            <div class="summary-card">
+              <div class="card-icon balance"><i class="fas fa-balance-scale"></i></div>
+              <div class="card-content">
+                <h3>Saldo Total</h3>
+                <p id="total-balance">R$ 0,00</p>
+              </div>
+            </div>
+            <div class="summary-card">
+              <div class="card-icon income"><i class="fas fa-arrow-up"></i></div>
+              <div class="card-content">
+                <h3>Receitas do Mês</h3>
+                <p id="monthly-income">R$ 0,00</p>
+              </div>
+            </div>
+            <div class="summary-card">
+              <div class="card-icon expense"><i class="fas fa-arrow-down"></i></div>
+              <div class="card-content">
+                <h3>Despesas do Mês</h3>
+                <p id="monthly-expenses">R$ 0,00</p>
+              </div>
+            </div>
+            <div class="summary-card">
+              <div class="card-icon savings"><i class="fas fa-piggy-bank"></i></div>
+              <div class="card-content">
+                <h3>Economia do Mês</h3>
+                <p id="monthly-savings">R$ 0,00</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="dashboard-grid">
+            <div class="chart-container">
+              <h3>Receitas vs. Despesas</h3>
+              <div class="chart-wrapper"><canvas id="main-chart"></canvas></div>
+            </div>
+            <div class="list-container">
+              <h3>Últimas Transações</h3>
+              <div id="recent-transactions-list"></div>
+            </div>
+            <div class="list-container">
+              <h3>Faturas Próximas</h3>
+              <div id="upcoming-invoices-list"></div>
+            </div>
+            <div class="list-container">
+              <h3>Orçamentos do Mês</h3>
+              <div id="budgets-overview-list" style="margin-top:var(--space-md);"></div>
+            </div>
+          </div>
+
+          <!-- Chat AI -->
+          <div id="dashboard-chat-wrapper">
+            <div class="chat-container" id="chat-container">
+              <div class="chat-header">
+              <h3><span class="chat-status"></span> Assistente Financeiro</h3>
+              <button class="btn-ghost" id="chat-ai-config-btn" title="Configurar IA"><i class="fas fa-cog"></i></button>
+            </div>
+            <div class="chat-messages" id="chat-messages"></div>
+            <div class="chat-quick-actions">
+              <button class="chat-quick-btn" data-action="-">➖ Despesa</button>
+              <button class="chat-quick-btn" data-action="+">➕ Receita</button>
+              <button class="chat-quick-btn" data-action="saldo">💰 Saldo</button>
+              <button class="chat-quick-btn" data-action="relatorio">📊 Relatório</button>
+              <button class="chat-quick-btn" data-action="ajuda">❓ Ajuda</button>
+            </div>
+            <div class="chat-input-area">
+              <input type="text" id="chat-input" placeholder="Diga algo como: -500 mercado..." autocomplete="off">
+              <button class="chat-mic-btn" id="chat-mic-btn" title="Gravar voz"><i class="fas fa-microphone"></i></button>
+              <button class="chat-send-btn" id="chat-send-btn" title="Enviar"><i class="fas fa-paper-plane"></i></button>
+            </div>
+            <!-- AI Config (collapsible) -->
+            <div class="chat-ai-settings hidden" id="chat-ai-settings">
+              <div class="form-group">
+                <label>Chave Gemini API (opcional)</label>
+                <div class="ai-key-input-group">
+                  <input type="password" id="gemini-api-key" placeholder="Cole sua chave Gemini aqui">
+                  <button class="btn btn-secondary" id="save-gemini-key"><i class="fas fa-save"></i></button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label>Chave OpenAI API (opcional)</label>
+                <div class="ai-key-input-group">
+                  <input type="password" id="openai-api-key" placeholder="Cole sua chave OpenAI aqui">
+                  <button class="btn btn-secondary" id="save-openai-key"><i class="fas fa-save"></i></button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===== CHAT PAGE ===== -->
+        <section id="chat-page" class="page hidden">
+          <h2><i class="fas fa-robot"></i> Assistente Financeiro</h2>
+          <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:var(--space-md);">Converse com nossa IA para tirar dúvidas, adicionar transações ou gerar relatórios.</p>
+          <div id="chat-page-wrapper" class="chat-page-fullscreen"></div>
+        </section>
+
+        <!-- ===== TRANSACTIONS ===== -->
+        <section id="transactions-page" class="page hidden">
+          <div class="actions-bar">
+            <h2><i class="fas fa-exchange-alt"></i> Transações</h2>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
+              <div class="search-wrapper">
+                <i class="fas fa-search search-icon"></i>
+                <input type="text" id="tx-search" placeholder="Pesquisar descrição...">
+              </div>
+              <button class="btn btn-primary" id="add-transaction-btn"><i class="fas fa-plus"></i> Nova Transação</button>
+            </div>
+          </div>
+
+          <!-- Filtros Avançados -->
+          <div id="tx-filters-bar" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
+            <select id="tx-filter-category" style="flex:1;min-width:140px;">
+              <option value="">Todas as categorias</option>
+            </select>
+            <select id="tx-filter-account" style="flex:1;min-width:140px;">
+              <option value="">Todas as contas</option>
+            </select>
+            <select id="tx-filter-who" style="flex:1;min-width:140px;">
+              <option value="">Todos os membros</option>
+            </select>
+            <label class="checkbox-container" style="display:flex;align-items:center;gap:8px;font-size:0.85rem;cursor:pointer;white-space:nowrap;margin-left:8px;">
+              <input type="checkbox" id="tx-show-future"> Ver valores futuros
+            </label>
+          </div>
+
+          <div class="table-container">
+            <table id="transactions-table">
+              <thead>
+                <tr>
+                  <th>Data</th>
+                  <th>Descrição</th>
+                  <th>Categoria</th>
+                  <th>Conta</th>
+                  <th>Quem</th>
+                  <th>Valor</th>
+                  <th>Ações</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+
+          <!-- Search Summary Bar -->
+          <div id="tx-summary-bar" class="table-summary-bar hidden">
+            <div class="summary-item">
+              <span class="summary-label">QUANTIDADE:</span>
+              <span id="tx-summary-count" class="summary-value">0</span>
+            </div>
+            <div class="summary-item">
+              <span class="summary-label">SOMA TODOS:</span>
+              <span id="tx-summary-total" class="summary-value">R$ 0,00</span>
+            </div>
+          </div>
+
+          <!-- Pagination Controls -->
+          <div class="pagination-controls">
+            <div class="pagination-rows-select">
+              <label for="tx-rows-per-page">Linhas por página:</label>
+              <select id="tx-rows-per-page">
+                <option value="10">10</option>
+                <option value="30" selected>30</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="all">Ver Todas</option>
+              </select>
+            </div>
+            
+            <div class="pagination-info" id="tx-pagination-info">
+              Página 1 de 1
+            </div>
+
+            <div class="pagination-actions">
+              <button class="pagination-btn" id="tx-prev-page" title="Página Anterior">
+                <i class="fas fa-chevron-left"></i> Anterior
+              </button>
+              <button class="pagination-btn" id="tx-next-page" title="Próxima Página">
+                Próxima <i class="fas fa-chevron-right"></i>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===== ACCOUNTS ===== -->
+        <section id="accounts-page" class="page hidden">
+          <div class="actions-bar">
+            <h2><i class="fas fa-wallet"></i> Contas</h2>
+            <button class="btn btn-primary" id="add-account-btn"><i class="fas fa-plus"></i> Nova Conta</button>
+          </div>
+
+          <!-- Resumo Financeiro -->
+          <div id="accounts-summary" class="accounts-summary-cards"></div>
+
+          <!-- Lista Agrupada -->
+          <div id="accounts-grouped-list"></div>
+        </section>
+
+        <!-- ===== PAYABLES (Contas a Pagar) ===== -->
+        <section id="payables-page" class="page hidden">
+          <div class="actions-bar">
+            <h2><i class="fas fa-file-invoice-dollar"></i> Contas a Pagar/Receber</h2>
+          </div>
+          <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:var(--space-md);">Transações não pagas do extrato irão aparecer aqui baseadas na data de vencimento.</p>
+          <div class="tabs payables-tabs">
+            <button class="tab-btn active" onclick="switchPayableTab('overdue', this)">Vencidas</button>
+            <button class="tab-btn" onclick="switchPayableTab('today', this)">Vencendo Hoje</button>
+            <button class="tab-btn" onclick="switchPayableTab('next7', this)">Próximos 7 Dias</button>
+            <button class="tab-btn" onclick="switchPayableTab('next30', this)">Próximos 30 Dias</button>
+            <button class="tab-btn" onclick="switchPayableTab('fixed', this)"><i class="fas fa-calendar-check"></i> Contas Fixas</button>
+          </div>
+          <div class="tab-content" id="overdue-tab">
+            <div id="payables-overdue-list" class="transactions-list" style="margin-top:var(--space-md);"></div>
+          </div>
+          <div class="tab-content hidden" id="today-tab">
+            <div id="payables-today-list" class="transactions-list" style="margin-top:var(--space-md);"></div>
+          </div>
+          <div class="tab-content hidden" id="next7-tab">
+            <div id="payables-next7-list" class="transactions-list" style="margin-top:var(--space-md);"></div>
+          </div>
+          <div class="tab-content hidden" id="next30-tab">
+            <div id="payables-next30-list" class="transactions-list" style="margin-top:var(--space-md);"></div>
+          </div>
+          <div class="tab-content hidden" id="fixed-tab">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:var(--space-md);margin-bottom:var(--space-md);">
+              <p style="font-size:0.85rem;color:var(--text-secondary);">Cadastre suas despesas recorrentes mensais (água, luz, internet, etc).</p>
+              <button class="btn btn-primary btn-sm" id="add-fixed-bill-btn"><i class="fas fa-plus"></i> Nova Conta Fixa</button>
+            </div>
+            <div id="fixed-bills-list"></div>
+          </div>
+        </section>
+
+        <!-- ===== PLANNING (Budgets & Goals) ===== -->
+        <section id="planning-page" class="page hidden">
+          <h2><i class="fas fa-bullseye"></i> Planejamento Financeiro</h2>
+          <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:var(--space-lg);">Acompanhe seus limites de gastos (Orçamentos) e as suas metas futuras (Objetivos).</p>
+          
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--space-xl);">
+            <div>
+              <div class="actions-bar" style="margin-bottom:var(--space-sm);">
+                <h3><i class="fas fa-chart-line"></i> Orçamentos Mensais</h3>
+                <button class="btn btn-sm btn-secondary" id="add-budget-btn"><i class="fas fa-plus"></i> Novo</button>
+              </div>
+              <div id="budgets-list" class="budgets-grid" style="grid-template-columns: 1fr;"></div>
+            </div>
+            
+            <div>
+              <div class="actions-bar" style="margin-bottom:var(--space-sm);">
+                <h3><i class="fas fa-flag-checkered"></i> Metas Futuras</h3>
+                <button class="btn btn-sm btn-secondary" id="add-goal-btn"><i class="fas fa-plus"></i> Nova</button>
+              </div>
+              <div id="goals-list" class="goals-grid" style="grid-template-columns: 1fr;"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===== REPORTS ===== -->
+        <section id="reports-page" class="page hidden">
+          <h2><i class="fas fa-chart-bar"></i> Relatórios</h2>
+          
+          <!-- Filtros Ano/Mês -->
+          <div class="reports-filters">
+            <div class="filter-group">
+              <label for="report-year-filter"><i class="fas fa-calendar"></i> Ano:</label>
+              <select id="report-year-filter"></select>
+            </div>
+            <div class="filter-group">
+              <label for="report-month-filter"><i class="fas fa-calendar-day"></i> Mês:</label>
+              <select id="report-month-filter">
+                <option value="all">Todos os Meses</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Cards de Resumo do Período -->
+          <div class="reports-summary-cards">
+            <div class="report-summary-card income-card">
+              <div class="report-card-icon"><i class="fas fa-arrow-up"></i></div>
+              <div class="report-card-content">
+                <span class="report-card-label">Total Receitas</span>
+                <span class="report-card-value" id="report-total-income">R$ 0,00</span>
+              </div>
+            </div>
+            <div class="report-summary-card expense-card">
+              <div class="report-card-icon"><i class="fas fa-arrow-down"></i></div>
+              <div class="report-card-content">
+                <span class="report-card-label">Total Despesas</span>
+                <span class="report-card-value" id="report-total-expense">R$ 0,00</span>
+              </div>
+            </div>
+            <div class="report-summary-card balance-card">
+              <div class="report-card-icon"><i class="fas fa-balance-scale"></i></div>
+              <div class="report-card-content">
+                <span class="report-card-label">Saldo do Período</span>
+                <span class="report-card-value" id="report-period-balance">R$ 0,00</span>
+              </div>
+            </div>
+            <div class="report-summary-card count-card">
+              <div class="report-card-icon"><i class="fas fa-receipt"></i></div>
+              <div class="report-card-content">
+                <span class="report-card-label">Transações</span>
+                <span class="report-card-value" id="report-tx-count">0</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Charts + Tables -->
+          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));gap:var(--space-lg);margin-bottom:var(--space-lg);">
+              <div class="card-large" style="display:flex;flex-direction:column;">
+                <h3 style="margin-bottom:var(--space-md);"><i class="fas fa-arrow-down" style="color:var(--expense-color);margin-right:6px;"></i>Despesas por Categoria</h3>
+                <div class="chart-wrapper" style="flex:1;min-height:300px;"><canvas id="reports-chart"></canvas></div>
+              </div>
+              <div class="card-large" style="display:flex;flex-direction:column;">
+                <h3 style="margin-bottom:var(--space-md);">Resumo de Gastos</h3>
+                <div style="flex:1;overflow-y:auto;max-height:400px;">
+                    <table style="width:100%;text-align:left;border-collapse:collapse;">
+                        <thead>
+                            <tr style="border-bottom:1px solid var(--border-color);">
+                                <th style="padding:8px 0;">Categoria</th>
+                                <th style="padding:8px 0;">Valor</th>
+                                <th style="padding:8px 0;">%</th>
+                            </tr>
+                        </thead>
+                        <tbody id="summary-table-body">
+                        </tbody>
+                    </table>
+                </div>
+              </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));gap:var(--space-lg);margin-bottom:var(--space-lg);">
+              <div class="card-large" style="display:flex;flex-direction:column;">
+                <h3 style="margin-bottom:var(--space-md);"><i class="fas fa-arrow-up" style="color:var(--income-color);margin-right:6px;"></i>Receitas por Categoria</h3>
+                <div class="chart-wrapper" style="flex:1;min-height:300px;"><canvas id="reports-income-chart"></canvas></div>
+              </div>
+              <div class="card-large" style="display:flex;flex-direction:column;">
+                <h3 style="margin-bottom:var(--space-md);">Resumo de Receitas</h3>
+                <div style="flex:1;overflow-y:auto;max-height:400px;">
+                    <table style="width:100%;text-align:left;border-collapse:collapse;">
+                        <thead>
+                            <tr style="border-bottom:1px solid var(--border-color);">
+                                <th style="padding:8px 0;">Categoria</th>
+                                <th style="padding:8px 0;">Valor</th>
+                                <th style="padding:8px 0;">%</th>
+                            </tr>
+                        </thead>
+                        <tbody id="income-summary-table-body">
+                        </tbody>
+                    </table>
+                </div>
+              </div>
+          </div>
+          
+          <!-- Gastos por Método de Pagamento -->
+          <div class="card-large" style="margin-bottom:var(--space-lg);">
+            <h3 style="margin-bottom:var(--space-md);"><i class="fas fa-credit-card" style="color:var(--primary-color);margin-right:6px;"></i>Gastos por Método de Pagamento</h3>
+            <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:var(--space-md);">Veja como você distribui seus pagamentos (apenas Despesas).</p>
+            <div id="methods-summary-list" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:var(--space-md);">
+              <!-- Renderizado via JS -->
+            </div>
+          </div>
+
+          <div class="card-large">
+            <h3 style="margin-bottom:var(--space-md);">Projeção de Fluxo de Caixa (Próximos 30 dias)</h3>
+            <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:var(--space-md);">Estimativa baseada no seu saldo atual em Contas Correntes e as transações não pagas que vencem à frente.</p>
+            <div class="chart-wrapper" style="min-height:300px;"><canvas id="cashflow-projection-chart"></canvas></div>
+          </div>
+        </section>
+
+        <!-- ===== CATEGORIES ===== -->
+        <section id="categories-page" class="page hidden">
+          <div class="actions-bar">
+            <h2><i class="fas fa-tags"></i> Categorias</h2>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button class="btn btn-primary" id="batch-categorize-btn" title="Categorizar múltiplas transações por descrição">
+                <i class="fas fa-layer-group"></i> Categorizar em Lote
+              </button>
+              <button class="btn btn-secondary" id="ai-auto-categorize-btn" title="Usar IA para re-categorizar transações 'Importado' e 'Transferência'">
+                <i class="fas fa-magic"></i> Auto Categorizar (IA)
+              </button>
+            </div>
+          </div>
+          <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:var(--space-md);">Todas as categorias extraídas das suas transações, com totais do período selecionado.</p>
+
+          <!-- Filtro de tipo + período -->
+          <div class="categories-controls">
+            <div class="cat-filter-pills">
+              <button class="cat-pill active" data-cat-filter="all">Todas</button>
+              <button class="cat-pill" data-cat-filter="despesa">Despesas</button>
+              <button class="cat-pill" data-cat-filter="receita">Receitas</button>
+            </div>
+            <div class="filter-group">
+              <label for="cat-period-filter">Período:</label>
+              <select id="cat-period-filter">
+                <option value="current-month">Este Mês</option>
+                <option value="last-month">Mês Passado</option>
+                <option value="current-year" selected>Este Ano</option>
+                <option value="all-time">Todos os Tempos</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Cards Resumo -->
+          <div class="categories-summary-cards" id="categories-summary"></div>
+
+          <!-- Lista de Categorias -->
+          <div id="categories-list" class="categories-list"></div>
+        </section>
+
+        <!-- ===== IMPORT ===== -->
+        <section id="import-page" class="page hidden">
+          <h2><i class="fas fa-file-import"></i> Importar Extrato Bancário</h2>
+          <div class="card-large">
+            <p style="margin-bottom:var(--space-lg);">Importe transações de arquivos OFX ou CSV do seu banco.</p>
+            <input type="file" id="import-file-input" accept=".ofx,.csv" class="hidden" multiple>
+            <label for="import-file-input" class="btn btn-secondary" style="cursor:pointer"><i class="fas fa-upload"></i> Selecionar Arquivo (.ofx ou .csv)</label>
+            <span id="import-file-name" style="margin-left:12px;color:var(--text-muted);font-size:0.85rem;"></span>
+            <div id="import-preview" class="hidden" style="margin-top:var(--space-lg);"></div>
+          </div>
+        </section>
+
+        <!-- ===== TOOLS ===== -->
+        <section id="tools-page" class="page hidden">
+          <h2><i class="fas fa-tools"></i> Ferramentas</h2>
+
+          <div style="display:flex; flex-direction:column; gap:var(--space-lg);">
+            <!-- Instalar App -->
+            <div class="card-large" id="pwa-install-card" style="display:none; border:2px solid var(--primary-color);">
+              <h3><i class="fas fa-mobile-alt"></i> Instalar Aplicativo</h3>
+              <p style="margin-bottom:var(--space-lg); color:var(--text-secondary);">Instale o NossaGrana no seu celular ou computador para acesso rápido e experiência de aplicativo nativo.</p>
+              <button class="btn btn-primary" id="install-app-btn" style="width:100%;">
+                <i class="fas fa-download"></i> Instalar Agora
+              </button>
+            </div>
+
+            <div class="card-large">
+              <h3><i class="fas fa-calculator"></i> Calculadora de Juros Compostos</h3>
+              <p style="margin-bottom:var(--space-lg); color:var(--text-secondary);">Calcule o crescimento do seu investimento com juros compostos e aportes mensais.</p>
+
+              <form id="compound-interest-form">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="initial-amount">Valor Inicial (R$)</label>
+                    <input type="number" id="initial-amount" step="0.01" min="0" placeholder="0,00" required>
+                  </div>
+                  <div class="form-group">
+                    <label for="monthly-contribution">Aporte Mensal (R$)</label>
+                    <input type="number" id="monthly-contribution" step="0.01" min="0" placeholder="0,00" required>
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="interest-rate">Taxa de Juros (%)</label>
+                    <div style="display:flex; gap:8px;">
+                       <input type="number" id="interest-rate" step="0.01" min="0" placeholder="0,00" required style="flex:1;">
+                       <select id="interest-rate-type" style="width:100px; padding:10px; border-radius:var(--border-radius-sm); border:1px solid var(--border-color); background:var(--bg-primary); color:var(--text-primary);">
+                         <option value="ano">Ao Ano</option>
+                         <option value="mes">Ao Mês</option>
+                       </select>
+                    </div>
+                  </div>
+                  <div class="form-group">
+                    <label for="period-years">Período</label>
+                    <div style="display:flex; gap:8px;">
+                      <input type="number" id="period-years" step="1" min="1" placeholder="1" required style="flex:1;">
+                      <select id="period-type" style="width:100px; padding:10px; border-radius:var(--border-radius-sm); border:1px solid var(--border-color); background:var(--bg-primary); color:var(--text-primary);">
+                        <option value="anos">Anos</option>
+                        <option value="meses">Meses</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary">
+                  <i class="fas fa-calculator"></i> Calcular
+                </button>
+              </form>
+
+              <div id="calculator-results" class="hidden" style="margin-top:var(--space-lg); padding:var(--space-md); background:var(--bg-secondary); border-radius:8px;">
+                <h4 style="margin-bottom:var(--space-sm);">Resultados do Investimento</h4>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));gap:var(--space-sm);">
+                  <div>
+                    <span style="font-size:0.85rem;color:var(--text-secondary);display:block;">Valor Total Investido:</span>
+                    <span id="total-invested" style="font-weight:600;"></span>
+                  </div>
+                  <div>
+                    <span style="font-size:0.85rem;color:var(--text-secondary);display:block;">Total em Juros:</span>
+                    <span id="total-interest" style="font-weight:600;color:var(--success-color);"></span>
+                  </div>
+                  <div>
+                    <span style="font-size:0.85rem;color:var(--text-secondary);display:block;">Valor Final Acumulado:</span>
+                    <span id="final-amount" style="font-weight:bold;color:var(--primary-color);"></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Exportar Dados -->
+            <div class="card-large">
+              <h3><i class="fas fa-file-csv"></i> Exportar Dados</h3>
+              <p style="margin-bottom:var(--space-lg); color:var(--text-secondary);">Exporte todas as suas transações, contas e metas para um arquivo CSV compatível com Excel e Google Sheets.</p>
+              <div style="display:flex;flex-direction:column;gap:var(--space-sm);">
+                <button class="btn btn-primary" id="export-transactions-csv"><i class="fas fa-download"></i> Exportar Transações (.csv)</button>
+                <button class="btn btn-secondary" id="export-accounts-csv"><i class="fas fa-download"></i> Exportar Contas (.csv)</button>
+                <button class="btn btn-secondary" id="export-goals-csv"><i class="fas fa-download"></i> Exportar Metas (.csv)</button>
+              </div>
+            </div>
+
+            <!-- Limpeza de Dados -->
+            <div class="card-large">
+              <h3><i class="fas fa-broom"></i> Limpeza de Dados</h3>
+              <p style="margin-bottom:var(--space-lg); color:var(--text-secondary);">Remova transações idênticas (mesma descrição, valor e data) que podem ter sido importadas em duplicidade.</p>
+              <button class="btn btn-secondary" id="btn-remove-duplicates" style="width:100%;">
+                <i class="fas fa-clone"></i> Remover Transações Duplicadas
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===== PROFILE ===== -->
+        <section id="profile-page" class="page hidden">
+          <h2><i class="fas fa-user-cog"></i> Perfil & Família</h2>
+
+          <div class="profile-section">
+            <h3><i class="fas fa-user"></i> Informações Pessoais</h3>
+            <form id="profile-form">
+              <!-- Profile Photo Upload -->
+              <div class="profile-photo-area">
+                <div class="profile-photo-wrapper" id="profile-photo-wrapper">
+                  <div class="profile-photo-placeholder" id="profile-photo-placeholder">
+                    <span id="profile-photo-initial">U</span>
+                  </div>
+                  <img src="" alt="Foto de perfil" class="profile-photo-img hidden" id="profile-photo-img">
+                  <div class="profile-photo-overlay" id="profile-photo-overlay">
+                    <i class="fas fa-camera"></i>
+                    <span>Alterar foto</span>
+                  </div>
+                </div>
+                <input type="file" id="profile-photo-input" accept="image/*" class="hidden">
+                <button type="button" class="btn btn-sm btn-secondary" id="profile-photo-remove-btn" style="display:none;">
+                  <i class="fas fa-trash-alt"></i> Remover foto
+                </button>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="profile-name">Nome</label>
+                  <input type="text" id="profile-name" required>
+                </div>
+                <div class="form-group">
+                  <label for="profile-email">Email</label>
+                  <input type="email" id="profile-email" readonly>
+                </div>
+              </div>
+              <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Salvar</button>
+            </form>
+          </div>
+
+          <div class="profile-section">
+            <h3><i class="fas fa-shield-alt"></i> Segurança</h3>
+            <form id="change-password-form">
+              <p style="color:var(--text-secondary);margin-bottom:var(--space-md);">Altere sua senha de acesso.</p>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="new-password">Nova Senha</label>
+                  <div class="password-wrapper">
+                    <input type="password" id="new-password" placeholder="Mínimo 6 caracteres" required minlength="6">
+                    <button type="button" class="password-toggle" onclick="togglePassword('new-password', this)"><i class="fas fa-eye"></i></button>
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="confirm-new-password">Confirme a Nova Senha</label>
+                  <div class="password-wrapper">
+                    <input type="password" id="confirm-new-password" placeholder="Repita a nova senha" required minlength="6">
+                    <button type="button" class="password-toggle" onclick="togglePassword('confirm-new-password', this)"><i class="fas fa-eye"></i></button>
+                  </div>
+                </div>
+              </div>
+              <button type="submit" class="btn btn-secondary"><i class="fas fa-key"></i> Alterar Senha</button>
+            </form>
+          </div>
+
+          <div class="profile-section">
+            <h3><i class="fas fa-heart"></i> Família / Casal</h3>
+            <div id="family-section">
+              <p style="color:var(--text-secondary);margin-bottom:var(--space-md);">Compartilhe suas finanças com seu parceiro(a).</p>
+              <div id="family-invite-area"></div>
+              <div id="family-members-area" style="margin-top:var(--space-lg);"></div>
+            </div>
+          </div>
+
+          <!-- Zona de Perigo -->
+          <div class="profile-section danger-zone" style="border:2px solid rgba(239,68,68,0.3);background:rgba(239,68,68,0.03);">
+            <h3 style="color:var(--expense-color);"><i class="fas fa-exclamation-triangle"></i> Zona de Perigo</h3>
+            <p style="color:var(--text-secondary);margin-bottom:var(--space-lg);font-size:0.85rem;">Ações irreversíveis. Tenha certeza antes de prosseguir.</p>
+            <div style="display:flex;flex-direction:column;gap:var(--space-md);max-width:400px;">
+              <div>
+                <p style="font-weight:600;margin-bottom:4px;">Limpar Todos os Dados</p>
+                <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:8px;">Apaga todas as transações, contas, orçamentos, metas e contas fixas. Não afeta seu login.</p>
+                <button class="btn btn-danger" id="btn-reset-data"><i class="fas fa-eraser"></i> Limpar Dados</button>
+              </div>
+              <hr style="border-color:rgba(239,68,68,0.15);">
+              <div>
+                <p style="font-weight:600;margin-bottom:4px;">Deletar Minha Conta</p>
+                <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:8px;">Remove permanentemente seu usuário do sistema. Se você faz parte de um casal, seu parceiro(a) manterá o acesso.</p>
+                <button class="btn btn-danger" id="btn-delete-account"><i class="fas fa-user-slash"></i> Deletar Conta</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </main>
+
+      <!-- FAB -->
+      <button class="fab" id="fab-btn" title="Nova Transação"><i class="fas fa-plus"></i></button>
+
+      <!-- Notifications Panel (Off-canvas) -->
+      <div id="notifications-panel" class="notifications-panel hidden">
+        <div class="notifications-header">
+          <h3><i class="fas fa-bell"></i> Notificações</h3>
+          <button id="close-notifications-btn"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="notifications-body" id="notifications-list">
+          <div class="empty-state" style="padding: 30px 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;">
+            <i class="fas fa-check-circle" style="font-size: 2.5rem; color: var(--primary-200); opacity: 0.5;"></i>
+            <p style="text-align:center; color: var(--text-secondary); margin: 0; font-size: 0.9rem;">Nenhuma notificação por enquanto.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ MODALS ============ -->
+
+  <!-- Transaction Modal -->
+  <div id="transaction-modal" class="modal-container hidden">
+    <div class="modal-content">
+      <button class="modal-close-btn" onclick="closeModal('transaction-modal')">&times;</button>
+      <h3 id="transaction-modal-title">Nova Transação</h3>
+      <form id="transaction-form">
+        <input type="hidden" id="tx-id">
+        <div class="form-group">
+          <label>Tipo</label>
+          <div class="segmented-control" id="tx-type-selector">
+            <button type="button" class="sg-btn active" data-value="despesa">Despesa</button>
+            <button type="button" class="sg-btn" data-value="receita">Receita</button>
+            <button type="button" class="sg-btn" data-value="transferencia">Transferência</button>
+          </div>
+          <input type="hidden" id="tx-type" value="despesa">
+        </div>
+        <div class="form-group">
+          <label for="tx-description">Descrição</label>
+          <input type="text" id="tx-description" placeholder="Ex: Mercado, Salário..." required>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="tx-amount">Valor (R$)</label>
+            <input type="number" id="tx-amount" step="0.01" min="0.01" placeholder="0,00" required>
+          </div>
+          <div class="form-group">
+            <label for="tx-date">Data</label>
+            <input type="date" id="tx-date" required>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="tx-category">Categoria</label>
+            <div class="category-input-wrapper">
+              <input type="text" id="tx-category" list="category-suggestions" placeholder="Alimentação, Transporte..." required autocomplete="off">
+              <datalist id="category-suggestions"></datalist>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="tx-account">Conta</label>
+            <select id="tx-account" required>
+              <option value="">Selecione</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Campo para Conta de Destino em caso de transferência -->
+        <div id="tx-target-account-group" class="form-group hidden">
+          <label for="tx-target-account">Conta de Destino / Recebimento</label>
+          <select id="tx-target-account">
+            <option value="">Selecione a conta de destino</option>
+          </select>
+          <p style="font-size:0.75rem;color:var(--text-muted);margin-top:4px;">
+            <i class="fas fa-info-circle"></i> O valor sairá da conta acima e entrará nesta conta.
+          </p>
+        </div>
+        <div class="form-group" style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" id="tx-paid" checked style="width:auto;">
+          <label for="tx-paid" style="margin:0;text-transform:none;font-size:0.85rem;">Já foi pago</label>
+        </div>
+
+        <!-- Vincular Conta Fixa -->
+        <div class="form-group" style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+          <input type="checkbox" id="tx-fixed-bill-toggle" style="width:auto;">
+          <label for="tx-fixed-bill-toggle" style="margin:0;text-transform:none;font-size:0.85rem;">
+            <i class="fas fa-calendar-check"></i> Vincular a Conta Fixa
+          </label>
+        </div>
+        <div id="tx-fixed-bill-panel" class="hidden" style="background:var(--bg-tertiary);border-radius:var(--border-radius);padding:var(--space-md);margin-top:var(--space-sm);">
+          <div class="form-group">
+            <label for="tx-fixed-bill-select">Selecione a Conta Fixa</label>
+            <select id="tx-fixed-bill-select">
+              <option value="">Nenhuma</option>
+            </select>
+          </div>
+          <p style="font-size:0.75rem;color:var(--text-muted);margin:4px 0 0;">
+            💡 Ao vincular, a descrição, categoria e valor serão preenchidos. Nas próximas importações, o sistema poderá identificar se essa conta foi paga.
+          </p>
+        </div>
+
+        <!-- Installment / Interest -->
+        <div class="form-group" style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+          <input type="checkbox" id="tx-installment-toggle" style="width:auto;">
+          <label for="tx-installment-toggle" style="margin:0;text-transform:none;font-size:0.85rem;">
+            <i class="fas fa-credit-card"></i> Parcelado
+          </label>
+        </div>
+        <div id="tx-installment-panel" class="hidden" style="background:var(--bg-tertiary);border-radius:var(--border-radius);padding:var(--space-md);margin-top:var(--space-sm);">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="tx-installments">Nº Parcelas</label>
+              <input type="number" id="tx-installments" min="2" max="72" value="2" placeholder="Ex: 10">
+            </div>
+            <div class="form-group">
+              <label for="tx-amount-mode">O valor acima é</label>
+              <select id="tx-amount-mode">
+                <option value="per_installment">Valor da parcela (10x de 29,90)</option>
+                <option value="total">Valor total (299 em 10x)</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="tx-interest">Juros mensal % (0 = sem juros)</label>
+            <input type="number" id="tx-interest" min="0" max="100" step="0.01" value="0" placeholder="Ex: 1.99">
+          </div>
+          <p style="font-size:0.75rem;color:var(--text-muted);margin:4px 0 0;">
+            💡 Cada parcela será criada como transação separada no mês correspondente. 
+            Ex: "10x de 29,90" → cria 10 transações de R$ 29,90.
+          </p>
+          <div class="form-group" style="border-top:1px solid var(--border-color); padding-top:var(--space-md); margin-top:var(--space-md);">
+            <p style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:var(--space-sm);">Ferramentas de Manutenção:</p>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+              <button type="button" class="btn btn-sm btn-secondary" onclick="markAllOldAsPaid()" title="Liquida compras antigas baseadas no dia de fechamento">
+                <i class="fas fa-check-double"></i> Limpar Faturas Pagas
+              </button>
+              <button type="button" class="btn btn-sm btn-secondary" onclick="cleanupOldCreditHistory()" title="Marca TUDO de 2024 e 2025 como pago">
+                <i class="fas fa-broom"></i> Limpar 2024/2025
+              </button>
+              <button type="button" class="btn btn-sm btn-primary" onclick="calibrateCreditCard()" title="Ajusta o saldo para bater com o limite disponível do banco">
+                <i class="fas fa-balance-scale"></i> Calibrar p/ Disponível
+              </button>
+            </div>
+            <div style="margin-top:8px;">
+               <label for="acc-initial-adjustment-tx" style="font-size:0.75rem;text-transform:none;">Ajuste de Calibração (Gerado automaticamente)</label>
+               <input type="number" id="acc-initial-adjustment-tx" step="0.01" value="0" readonly style="background:var(--bg-tertiary); font-size:0.8rem; height:30px;">
+            </div>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary" style="width:100%;margin-top:var(--space-md);">
+          <i class="fas fa-check"></i> Salvar Transação
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Account Modal -->
+  <div id="account-modal" class="modal-container hidden">
+    <div class="modal-content">
+      <button class="modal-close-btn" onclick="closeModal('account-modal')">&times;</button>
+      <h3 id="account-modal-title">Nova Conta</h3>
+      <form id="account-form">
+        <input type="hidden" id="acc-id">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="acc-name">Nome da Conta</label>
+            <input type="text" id="acc-name" placeholder="Ex: Nubank, Carteira..." required>
+          </div>
+          <div class="form-group">
+            <label for="acc-owner-tag">Tag / Titular (Opcional)</label>
+            <input type="text" id="acc-owner-tag" placeholder="Ex: João, Maria, Conjunta...">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="acc-type">Tipo</label>
+            <select id="acc-type">
+              <option value="conta_corrente">Conta Corrente</option>
+              <option value="poupanca">Poupança</option>
+              <option value="investimento">Investimento</option>
+              <option value="cartao_credito">Cartão de Crédito</option>
+              <option value="carteira">Carteira (Cash)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="acc-initial-balance">Saldo Inicial / Fatura (R$)</label>
+            <input type="number" id="acc-initial-balance" step="0.01" value="0" required>
+          </div>
+        </div>
+
+        <!-- Campos Extras para Cartão de Crédito -->
+        <div id="acc-credit-group" class="hidden" style="background:var(--bg-tertiary); padding:var(--space-md); border-radius:8px; margin-bottom:var(--space-md);">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="acc-credit-limit">Limite Total (R$)</label>
+              <input type="number" id="acc-credit-limit" step="0.01" placeholder="Ex: 5450.00">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="acc-closing-day">Dia de Fechamento</label>
+              <input type="number" id="acc-closing-day" min="1" max="31" placeholder="Ex: 14">
+            </div>
+            <div class="form-group">
+              <label for="acc-due-day">Dia de Vencimento</label>
+              <input type="number" id="acc-due-day" min="1" max="31" placeholder="Ex: 21">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Ajuste / Calibração</label>
+            <div class="account-actions-flex" style="display:flex; flex-wrap:wrap; gap:var(--space-sm); margin-bottom:var(--space-md);">
+                <button type="button" class="btn btn-secondary" onclick="calibrateCreditCard()" style="flex:1 1 auto; font-size:0.75rem; padding:8px 12px;">
+                  <i class="fas fa-magic"></i> Calibrar
+                </button>
+                <button type="button" class="btn btn-secondary" onclick="markAllOldAsPaid()" style="flex:1 1 auto; font-size:0.75rem; padding:8px 12px; color:var(--success-color);">
+                  <i class="fas fa-check-double"></i> Pagar Antigas
+                </button>
+                <button type="button" class="btn btn-secondary" onclick="auditCreditCardInstallments()" style="flex:1 1 auto; font-size:0.75rem; padding:8px 12px;" title="Encontrar parcelas futuras do cartão">
+                  <i class="fas fa-search-plus"></i> Audit.
+                </button>
+            </div>
+            <p style="font-size:0.7rem; color:var(--text-secondary); margin-top:4px;">Use para bater o Limite Disponível do app com o do seu banco.</p>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="acc-initial-adjustment">Ajuste de Saldo/Calibração (R$)</label>
+          <input type="number" id="acc-initial-adjustment" step="0.01" value="0">
+          <small style="color:var(--text-muted); font-size:0.75rem;">Este valor soma/subtrai do saldo total para bater com o extrato.</small>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width:100%;margin-top:var(--space-md);">
+          <i class="fas fa-check"></i> Salvar Conta
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Budget Modal -->
+  <div id="budget-modal" class="modal-container hidden">
+    <div class="modal-content">
+      <button class="modal-close-btn" onclick="closeModal('budget-modal')">&times;</button>
+      <h3 id="budget-modal-title">Novo Orçamento</h3>
+      <form id="budget-form">
+        <input type="hidden" id="budget-id">
+        <div class="form-group">
+          <label for="budget-category">Categoria</label>
+          <input type="text" id="budget-category" placeholder="Alimentação, Transporte..." required>
+        </div>
+        <div class="form-group">
+          <label for="budget-limit">Limite Mensal (R$)</label>
+          <input type="number" id="budget-limit" step="0.01" min="1" required>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width:100%;">
+          <i class="fas fa-check"></i> Salvar Orçamento
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Goal Modal -->
+  <div id="goal-modal" class="modal-container hidden">
+    <div class="modal-content">
+      <button class="modal-close-btn" onclick="closeModal('goal-modal')">&times;</button>
+      <h3 id="goal-modal-title">Nova Meta</h3>
+      <form id="goal-form">
+        <input type="hidden" id="goal-id">
+        <div class="form-group">
+          <label for="goal-name">Nome da Meta</label>
+          <input type="text" id="goal-name" placeholder="Ex: Viagem, Reserva de emergência..." required>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="goal-target">Valor Alvo (R$)</label>
+            <input type="number" id="goal-target" step="0.01" min="1" required>
+          </div>
+          <div class="form-group">
+            <label for="goal-current">Valor Atual Manual (R$)</label>
+            <input type="number" id="goal-current" step="0.01" value="0">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="goal-linked-account">Vincular a uma Conta (Opcional)</label>
+          <select id="goal-linked-account">
+            <option value="">Nenhuma (usar valor manual)</option>
+          </select>
+          <small style="color:var(--text-muted);font-size:0.75rem;">Se vinculada, o progresso da meta será atualizado automaticamente com base no saldo da conta escolhida.</small>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width:100%;">
+          <i class="fas fa-check"></i> Salvar Meta
+        </button>
+      </form>
+    </div>
+  </div>
+  <!-- Fixed Bill Modal -->
+  <div id="fixed-bill-modal" class="modal-container hidden">
+    <div class="modal-content">
+      <button class="modal-close-btn" onclick="closeModal('fixed-bill-modal')">&times;</button>
+      <h3 id="fixed-bill-modal-title">Nova Conta Fixa</h3>
+      <form id="fixed-bill-form">
+        <input type="hidden" id="fb-id">
+        <div class="form-group">
+          <label for="fb-name">Nome da Conta</label>
+          <input type="text" id="fb-name" placeholder="Ex: Luz, Água, Internet, Academia..." required>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="fb-amount">Valor Estimado (R$)</label>
+            <input type="number" id="fb-amount" step="0.01" min="0.01" required>
+          </div>
+          <div class="form-group">
+            <label for="fb-due-day">Dia do Vencimento</label>
+            <input type="number" id="fb-due-day" min="1" max="31" placeholder="10" required>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="fb-category">Categoria</label>
+          <input type="text" id="fb-category" placeholder="Moradia, Saúde, Educação..." value="Moradia">
+        </div>
+        <button type="submit" class="btn btn-primary" style="width:100%;">
+          <i class="fas fa-check"></i> Salvar Conta Fixa
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Batch Categorize Modal -->
+  <div id="batch-categorize-modal" class="modal-container hidden">
+    <div class="modal-content" style="max-width:700px;">
+      <button class="modal-close-btn" onclick="closeModal('batch-categorize-modal')">&times;</button>
+      <h3><i class="fas fa-layer-group"></i> Categorizar em Lote</h3>
+      <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:var(--space-md);">Busque transações por descrição e aplique uma nova categoria a todas de uma vez.</p>
+
+      <!-- Search -->
+      <div class="form-group">
+        <label for="batch-search-input">Buscar por descrição</label>
+        <div class="search-wrapper" style="margin:0;">
+          <i class="fas fa-search search-icon"></i>
+          <input type="text" id="batch-search-input" placeholder="Ex: Union Team, Uber, Netflix..." autocomplete="off">
+        </div>
+      </div>
+
+      <!-- Results info -->
+      <div id="batch-results-info" class="hidden" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-sm);flex-wrap:wrap;gap:8px;">
+        <span id="batch-results-count" style="font-size:0.9rem;font-weight:600;"></span>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-sm btn-secondary" id="batch-select-all-btn">Selecionar Todas</button>
+          <button class="btn btn-sm btn-secondary" id="batch-deselect-all-btn">Desmarcar Todas</button>
+        </div>
+      </div>
+
+      <!-- Results table -->
+      <div id="batch-results-container" class="hidden" style="max-height:280px;overflow-y:auto;border:1px solid var(--border-color);border-radius:var(--border-radius);margin-bottom:var(--space-md);">
+        <table class="batch-results-table">
+          <thead>
+            <tr>
+              <th style="width:40px;"><input type="checkbox" id="batch-check-all" checked></th>
+              <th>Data</th>
+              <th>Descrição</th>
+              <th>Categoria Atual</th>
+              <th>Valor</th>
+            </tr>
+          </thead>
+          <tbody id="batch-results-tbody"></tbody>
+        </table>
+      </div>
+
+      <!-- Category selector -->
+      <div id="batch-action-panel" class="hidden" style="background:var(--bg-tertiary);border-radius:var(--border-radius);padding:var(--space-md);">
+        <div class="form-group" style="margin-bottom:var(--space-sm);">
+          <label for="batch-new-category">Nova Categoria</label>
+          <input type="text" id="batch-new-category" list="category-suggestions" placeholder="Saúde, Alimentação, Lazer/Assinaturas..." autocomplete="off">
+        </div>
+        <button class="btn btn-primary" id="batch-apply-btn" style="width:100%;">
+          <i class="fas fa-check-double"></i> Aplicar Categoria a <span id="batch-apply-count">0</span> transações
+        </button>
+      </div>
+
+      <!-- Empty state -->
+      <div id="batch-empty-state" style="text-align:center;padding:var(--space-xl);color:var(--text-secondary);">
+        <i class="fas fa-search" style="font-size:2rem;margin-bottom:var(--space-sm);opacity:0.5;"></i>
+        <p>Digite uma descrição acima para buscar transações.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Script -->
+
+  <!-- Global Helper -->
+  <script>
+    function togglePassword(inputId, btn) {
+      const input = document.getElementById(inputId);
+      const icon = btn.querySelector('i');
+      if (input.type === 'password') {
+        input.type = 'text';
+        icon.classList.replace('fa-eye', 'fa-eye-slash');
+      } else {
+        input.type = 'password';
+        icon.classList.replace('fa-eye-slash', 'fa-eye');
+      }
+    }
+    function closeModal(id) {
+      document.getElementById(id)?.classList.add('hidden');
+    }
+    function openModal(id) {
+      document.getElementById(id)?.classList.remove('hidden');
+    }
+  </script>
+</body>
+</html>

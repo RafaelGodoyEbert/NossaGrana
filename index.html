@@ -21,8 +21,8 @@
 
   <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script type="module" crossorigin src="/NossaGrana/assets/index-C--PJOdk.js"></script>
-  <link rel="stylesheet" crossorigin href="/NossaGrana/assets/index-p4OU4ik4.css">
+  <script type="module" crossorigin src="/NossaGrana/assets/index-eD35YXfo.js"></script>
+  <link rel="stylesheet" crossorigin href="/NossaGrana/assets/index-DDd83GhU.css">
 </head>
 <body>
   <!-- Toast Container -->
@@ -98,13 +98,13 @@
             </div>
             <div class="form-group">
               <div class="password-wrapper">
-                <input type="password" id="register-password" placeholder="Senha (mín. 6 caracteres)" required minlength="6">
+                <input type="password" id="register-password" placeholder="Senha (mín. 6 caracteres)" required minlength="6" autocomplete="new-password">
                 <button type="button" class="password-toggle" onclick="togglePassword('register-password', this)"><i class="fas fa-eye"></i></button>
               </div>
             </div>
             <div class="form-group">
               <div class="password-wrapper">
-                <input type="password" id="register-confirm" placeholder="Confirme a senha" required minlength="6">
+                <input type="password" id="register-confirm" placeholder="Confirme a senha" required minlength="6" autocomplete="new-password">
                 <button type="button" class="password-toggle" onclick="togglePassword('register-confirm', this)"><i class="fas fa-eye"></i></button>
               </div>
             </div>
@@ -198,6 +198,16 @@
           </div>
         </header>
 
+        <aside id="import-sync-status" class="import-sync-status hidden" aria-live="polite">
+          <div><strong id="import-sync-title"></strong><p id="import-sync-detail"></p></div>
+          <progress id="import-sync-progress" max="100" value="0" aria-label="Progresso do envio ao servidor"></progress>
+        </aside>
+
+        <aside id="family-access-status" class="family-access-status hidden" aria-live="polite">
+          <div class="family-access-status-icon"><i class="fas fa-user-shield"></i></div>
+          <div><strong id="family-access-title"></strong><p id="family-access-detail"></p></div>
+        </aside>
+
         <!-- ===== DASHBOARD ===== -->
         <section id="dashboard-page" class="page">
           <div class="couple-filter">
@@ -277,22 +287,22 @@
               <button class="chat-send-btn" id="chat-send-btn" title="Enviar"><i class="fas fa-paper-plane"></i></button>
             </div>
             <!-- AI Config (collapsible) -->
-            <div class="chat-ai-settings hidden" id="chat-ai-settings">
+            <form class="chat-ai-settings hidden" id="chat-ai-settings" autocomplete="off" onsubmit="return false;">
               <div class="form-group">
                 <label>Chave Gemini API (opcional)</label>
                 <div class="ai-key-input-group">
-                  <input type="password" id="gemini-api-key" placeholder="Cole sua chave Gemini aqui">
-                  <button class="btn btn-secondary" id="save-gemini-key"><i class="fas fa-save"></i></button>
+                  <input type="password" id="gemini-api-key" placeholder="Cole sua chave Gemini aqui" autocomplete="off">
+                  <button type="button" class="btn btn-secondary" id="save-gemini-key"><i class="fas fa-save"></i></button>
                 </div>
               </div>
               <div class="form-group">
                 <label>Chave OpenAI API (opcional)</label>
                 <div class="ai-key-input-group">
-                  <input type="password" id="openai-api-key" placeholder="Cole sua chave OpenAI aqui">
-                  <button class="btn btn-secondary" id="save-openai-key"><i class="fas fa-save"></i></button>
+                  <input type="password" id="openai-api-key" placeholder="Cole sua chave OpenAI aqui" autocomplete="off">
+                  <button type="button" class="btn btn-secondary" id="save-openai-key"><i class="fas fa-save"></i></button>
                 </div>
               </div>
-            </div>
+            </form>
           </div>
         </section>
 
@@ -312,7 +322,23 @@
                 <i class="fas fa-search search-icon"></i>
                 <input type="text" id="tx-search" placeholder="Pesquisar descrição...">
               </div>
+              <div class="tx-primary-actions">
+              <details class="tx-export" id="tx-export-menu">
+                <summary class="btn btn-secondary tx-export-trigger"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4"/></svg> Exportar <svg class="tx-export-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></summary>
+                <div class="tx-export-options">
+                  <p class="tx-export-label">EXPORTAR EXTRATO</p>
+                  <button type="button" class="tx-export-option" id="tx-export-pdf">
+                    <span class="tx-export-icon tx-export-icon-pdf" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M14 3H5v18h14V8zM14 3v5h5M8 12h8m-8 4h5"/></svg></span>
+                    <span><strong>PDF</strong><small>Resumo e transações</small></span>
+                  </button>
+                  <button type="button" class="tx-export-option" id="tx-export-csv">
+                    <span class="tx-export-icon tx-export-icon-csv" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M14 3H5v18h14V8zM14 3v5h5M8 12h8v6H8zm4 0v6m-4-3h8"/></svg></span>
+                    <span><strong>CSV</strong><small>Abrir em planilha</small></span>
+                  </button>
+                </div>
+              </details>
               <button class="btn btn-primary" id="add-transaction-btn"><i class="fas fa-plus"></i> Nova Transação</button>
+              </div>
             </div>
           </div>
 
@@ -356,7 +382,19 @@
               <span id="tx-summary-count" class="summary-value">0</span>
             </div>
             <div class="summary-item">
-              <span class="summary-label">SOMA TODOS:</span>
+              <span class="summary-label">RECEITAS:</span>
+              <span id="tx-summary-income" class="summary-value income">R$ 0,00</span>
+            </div>
+            <div class="summary-item">
+              <span class="summary-label">DESPESAS:</span>
+              <span id="tx-summary-expense" class="summary-value expense">R$ 0,00</span>
+            </div>
+            <div class="summary-item" title="Receitas + despesas dos resultados filtrados">
+              <span class="summary-label">TOTAL MOVIMENTADO:</span>
+              <span id="tx-summary-movement" class="summary-value">R$ 0,00</span>
+            </div>
+            <div class="summary-item" title="Receitas − despesas dos resultados filtrados">
+              <span class="summary-label">SALDO:</span>
               <span id="tx-summary-total" class="summary-value">R$ 0,00</span>
             </div>
           </div>
@@ -772,14 +810,14 @@
                 <div class="form-group">
                   <label for="new-password">Nova Senha</label>
                   <div class="password-wrapper">
-                    <input type="password" id="new-password" placeholder="Mínimo 6 caracteres" required minlength="6">
+                    <input type="password" id="new-password" placeholder="Mínimo 6 caracteres" required minlength="6" autocomplete="new-password">
                     <button type="button" class="password-toggle" onclick="togglePassword('new-password', this)"><i class="fas fa-eye"></i></button>
                   </div>
                 </div>
                 <div class="form-group">
                   <label for="confirm-new-password">Confirme a Nova Senha</label>
                   <div class="password-wrapper">
-                    <input type="password" id="confirm-new-password" placeholder="Repita a nova senha" required minlength="6">
+                    <input type="password" id="confirm-new-password" placeholder="Repita a nova senha" required minlength="6" autocomplete="new-password">
                     <button type="button" class="password-toggle" onclick="togglePassword('confirm-new-password', this)"><i class="fas fa-eye"></i></button>
                   </div>
                 </div>
@@ -1202,6 +1240,62 @@
         <i class="fas fa-search" style="font-size:2rem;margin-bottom:var(--space-sm);opacity:0.5;"></i>
         <p>Digite uma descrição acima para buscar transações.</p>
       </div>
+    </div>
+  </div>
+
+
+  <!-- Family Access Modal -->
+  <div id="family-access-modal" class="modal-container hidden">
+    <div class="modal-content family-access-modal-content">
+      <button class="modal-close-btn" onclick="closeModal('family-access-modal')">&times;</button>
+      <h3><i class="fas fa-user-shield"></i> Gerenciar acesso</h3>
+      <p class="family-access-modal-subtitle">Permissões de <strong id="family-access-member-name"></strong></p>
+      <input type="hidden" id="family-access-uid">
+      <input type="hidden" id="family-access-mode" value="edit">
+
+      <div id="family-remove-options" class="form-group hidden family-remove-options">
+        <label for="family-remove-policy">Ao remover da família</label>
+        <select id="family-remove-policy">
+          <option value="revoke">Revogar todo o acesso imediatamente</option>
+          <option value="retain">Manter acesso histórico definido abaixo</option>
+        </select>
+        <small>O acesso histórico é somente leitura.</small>
+      </div>
+
+      <div id="family-access-fields">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="family-access-from">Acesso a partir de</label>
+            <input type="date" id="family-access-from">
+            <small>Em branco = desde o início.</small>
+          </div>
+          <div class="form-group">
+            <label for="family-access-until">Acesso até</label>
+            <input type="date" id="family-access-until">
+            <small>Em branco = sem data final.</small>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="family-access-scope">O que pode visualizar</label>
+          <select id="family-access-scope">
+            <option value="all">Geral — todas as contas</option>
+            <option value="accounts">Parcial — somente contas selecionadas</option>
+          </select>
+        </div>
+
+        <div id="family-access-accounts-wrap" class="form-group hidden">
+          <label>Contas permitidas</label>
+          <div id="family-access-accounts" class="family-access-accounts"></div>
+        </div>
+      </div>
+
+      <div class="family-access-note">
+        <i class="fas fa-info-circle"></i>
+        O período limita as transações visíveis. Acesso parcial mostra somente as contas escolhidas.
+      </div>
+      <div id="family-access-feedback" class="family-access-feedback" role="status" aria-live="polite"></div>
+      <button type="button" class="btn btn-primary" id="family-access-save-btn" style="width:100%;"><i class="fas fa-save"></i> Salvar acesso</button>
     </div>
   </div>
 

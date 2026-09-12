@@ -239,6 +239,31 @@ export async function saveTransactionsBatch(transactions, onProgress, { queueLoc
  * @param {function} onProgress - Callback(done, total)
  * @returns {Promise<number>} Number of deleted transactions
  */
+export async function moveTransactionsToAccount(transactionIds, targetAccountId, onProgress) {
+  if (!Array.isArray(transactionIds) || !transactionIds.length) return 0;
+  if (!targetAccountId) throw new Error('Conta de destino inválida.');
+  if (isDemo()) {
+    let moved = 0;
+    transactionIds.forEach(id => {
+      const tx = demoData.transactions.find(t => t.id === id);
+      if (tx) { tx.accountId = targetAccountId; moved++; }
+    });
+    if (onProgress) onProgress(moved, transactionIds.length);
+    return moved;
+  }
+  const BATCH_SIZE = 450;
+  let moved = 0;
+  for (let i = 0; i < transactionIds.length; i += BATCH_SIZE) {
+    const chunk = transactionIds.slice(i, i + BATCH_SIZE);
+    const batch = db.batch();
+    chunk.forEach(id => batch.update(db.collection('transactions').doc(id), { accountId: targetAccountId }));
+    await batch.commit();
+    moved += chunk.length;
+    if (onProgress) onProgress(moved, transactionIds.length);
+  }
+  return moved;
+}
+
 export async function deleteTransactionsBatch(transactionIds, onProgress) {
   if (isDemo()) {
     transactionIds.forEach(id => {
@@ -265,6 +290,36 @@ export async function deleteTransactionsBatch(transactionIds, onProgress) {
   }
 
   return deleted;
+}
+
+/**
+ * Move transações existentes para outra conta sem duplicá-las.
+ */
+export async function moveTransactionsBatch(transactionIds, targetAccountId, onProgress) {
+  if (!Array.isArray(transactionIds) || !transactionIds.length) return 0;
+  if (!targetAccountId) throw new Error('Conta de destino inválida.');
+
+  if (isDemo()) {
+    let moved = 0;
+    transactionIds.forEach(id => {
+      const tx = demoData.transactions.find(t => t.id === id);
+      if (tx) { tx.accountId = targetAccountId; moved++; }
+    });
+    if (onProgress) onProgress(moved, transactionIds.length);
+    return moved;
+  }
+
+  const BATCH_SIZE = 450;
+  let moved = 0;
+  for (let i = 0; i < transactionIds.length; i += BATCH_SIZE) {
+    const chunk = transactionIds.slice(i, i + BATCH_SIZE);
+    const batch = db.batch();
+    chunk.forEach(id => batch.update(db.collection('transactions').doc(id), { accountId: targetAccountId }));
+    await batch.commit();
+    moved += chunk.length;
+    if (onProgress) onProgress(moved, transactionIds.length);
+  }
+  return moved;
 }
 
 // ============================

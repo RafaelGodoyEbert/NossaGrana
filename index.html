@@ -1187,6 +1187,24 @@
     </div>
   </div>
 
+  <!-- Move Transactions Modal -->
+  <div id="move-transactions-modal" class="modal-container hidden">
+    <div class="modal-content" style="max-width:560px;">
+      <button class="modal-close-btn" onclick="closeModal('move-transactions-modal')">&times;</button>
+      <h3><i class="fas fa-exchange-alt"></i> Mover lançamentos</h3>
+      <input type="hidden" id="move-transactions-source-id">
+      <p class="move-transactions-summary">Mover <strong id="move-transactions-count">0</strong> lançamentos de <strong id="move-transactions-source"></strong> para outra conta.</p>
+      <div class="form-group">
+        <label for="move-transactions-target">Conta de destino</label>
+        <select id="move-transactions-target"><option value="">Selecione a conta de destino...</option></select>
+      </div>
+      <div class="move-transactions-note"><i class="fas fa-info-circle"></i><span>Isso não cria uma nova transferência. Os lançamentos existentes apenas passam a pertencer à conta escolhida.</span></div>
+      <progress id="move-transactions-progress" class="hidden" max="100" value="0"></progress>
+      <div id="move-transactions-feedback" class="move-transactions-feedback" role="status" aria-live="polite"></div>
+      <button type="button" class="btn btn-primary" id="move-transactions-confirm" style="width:100%;"><i class="fas fa-exchange-alt"></i> Mover lançamentos</button>
+    </div>
+  </div>
+
   <!-- Batch Categorize Modal -->
   <div id="batch-categorize-modal" class="modal-container hidden">
     <div class="modal-content" style="max-width:700px;">

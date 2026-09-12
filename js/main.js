@@ -6,7 +6,7 @@ import {
   saveGoal, deleteGoal, saveFixedBill, deleteFixedBill,
   getUserProfile, saveUserProfile,
   createFamily, getFamilyByInviteCode, getFamily, updateFamily, joinFamily, ensureFamilyInvite,
-  calculateBalances, resetFamilyData, deleteTransactionsBatch
+  calculateBalances, resetFamilyData, deleteTransactionsBatch, moveTransactionsBatch
 } from './firestore.js';
 import { formatCurrency, formatDate, showToast, todayString, generateInviteCode, getGreeting } from './utils.js';
 import { initChat } from './chat/chat-ui.js';
@@ -369,6 +369,26 @@ function renderLoadedData(refreshProfile = true) {
 
 }
 
+function renderPageData(page, refreshProfile = false) {
+  state.userName = state.profile?.name || 'Usuário';
+  switch (page) {
+    case 'dashboard': renderDashboard(); break;
+    case 'transactions': renderTransactions(); break;
+    case 'accounts': renderAccounts(); break;
+    case 'categories': renderCategories(); break;
+    case 'planning': renderBudgets(); renderGoals(); break;
+    case 'payables': renderPayables(); break;
+    case 'reports': renderReports(); break;
+    case 'profile': if (refreshProfile) renderProfile(); renderFamilyAccessStatus(); break;
+  }
+}
+
+function renderActivePage() {
+  const active = document.querySelector('.page:not(.hidden)');
+  const page = active?.id?.replace(/-page$/, '') || 'dashboard';
+  renderPageData(page, false);
+}
+
 let dataListeners = [];
 let dataRenderTimer;
 
@@ -389,7 +409,7 @@ function startRestrictedDataListeners() {
   const redraw = () => {
     if (!currentSession()) return;
     state.accounts = calculateBalances([...accountById.values()], state.transactions);
-    renderLoadedData(false);
+    renderActivePage();
   };
   const refreshTransactions = () => {
     state.transactions = [...txByAccount.values()].flat();
@@ -447,7 +467,7 @@ function startDataListeners() {
     dataRenderTimer = setTimeout(() => {
       if (!currentSession()) return;
       state.accounts = calculateBalances(state.accounts, state.transactions);
-      renderLoadedData(false);
+      renderActivePage();
     }, 100);
   };
   dataListeners.push(db.collection('transactions').where('familyId', '==', familyId)
@@ -1444,7 +1464,7 @@ function populateTransactionFilters() {
 
 function updatePaginationUI(totalItems) {
   const rowsPerPage = state.txPagination.rowsPerPage === 'all' ? totalItems : parseInt(state.txPagination.rowsPerPage);
-  const totalPages = Math.max(1, Math.ceil(totalItems / rowsPerPage));
+  const totalPages = Math.max(1, Math.ceil(totalItems / Math.max(1, rowsPerPage)));
   const currentPage = state.txPagination.currentPage;
 
   const infoEl = document.getElementById('tx-pagination-info');
@@ -1454,13 +1474,12 @@ function updatePaginationUI(totalItems) {
     } else {
       const startRange = totalItems === 0 ? 0 : (currentPage - 1) * rowsPerPage + 1;
       const endRange = Math.min(currentPage * rowsPerPage, totalItems);
-      infoEl.textContent = `Mostrando ${startRange}-${endRange} de ${totalItems} (Página ${currentPage} de ${totalPages})`;
+      infoEl.innerHTML = `Mostrando ${startRange}-${endRange} de ${totalItems} (Página <input type="number" id="tx-page-jump" class="pagination-page-input" min="1" max="${totalPages}" value="${currentPage}" inputmode="numeric" aria-label="Página atual"> de ${totalPages})`;
     }
   }
 
   const prevBtn = document.getElementById('tx-prev-page');
   const nextBtn = document.getElementById('tx-next-page');
-
   if (prevBtn) prevBtn.disabled = currentPage <= 1 || state.txPagination.rowsPerPage === 'all';
   if (nextBtn) nextBtn.disabled = currentPage >= totalPages || state.txPagination.rowsPerPage === 'all';
 }
@@ -1676,39 +1695,42 @@ function cancelInlineEdit(cell, originalContent) {
 // Accounts Page
 // ============================
 
-// Bank logo detection based on account name keywords
+// Bank branding detection based on account name keywords.
+// Keep icons local to avoid third-party tracking/blocking from external logo services.
 const BANK_LOGOS = [
-  { keywords: ['nubank', 'nu '], logo: 'https://logo.clearbit.com/nubank.com.br', color: '#820AD1' },
-  { keywords: ['inter', 'banco inter'], logo: 'https://logo.clearbit.com/bancointer.com.br', color: '#FF7A00' },
-  { keywords: ['bradesco'], logo: 'https://logo.clearbit.com/bradesco.com.br', color: '#CC092F' },
-  { keywords: ['itau', 'itaú'], logo: 'https://logo.clearbit.com/itau.com.br', color: '#003399' },
-  { keywords: ['caixa', 'cef'], logo: 'https://logo.clearbit.com/caixa.gov.br', color: '#005CA9' },
-  { keywords: ['banco do brasil', ' bb', 'bb '], logo: 'https://logo.clearbit.com/bb.com.br', color: '#FECE00' },
-  { keywords: ['santander'], logo: 'https://logo.clearbit.com/santander.com.br', color: '#EC0000' },
-  { keywords: ['c6', 'c6 bank'], logo: 'https://logo.clearbit.com/c6bank.com.br', color: '#242424' },
-  { keywords: ['pagbank', 'pagseguro'], logo: 'https://logo.clearbit.com/pagbank.com.br', color: '#00A651' },
-  { keywords: ['mercado pago', 'mercadopago'], logo: 'https://logo.clearbit.com/mercadopago.com.br', color: '#009EE3' },
-  { keywords: ['neon'], logo: 'https://logo.clearbit.com/neon.com.br', color: '#0DC5FF' },
-  { keywords: ['next'], logo: 'https://logo.clearbit.com/next.me', color: '#00E68A' },
-  { keywords: ['btg'], logo: 'https://logo.clearbit.com/btgpactual.com', color: '#1A2537' },
-  { keywords: ['xp'], logo: 'https://logo.clearbit.com/xpi.com.br', color: '#000000' },
-  { keywords: ['rico'], logo: 'https://logo.clearbit.com/rico.com.vc', color: '#FF5500' },
-  { keywords: ['sicoob'], logo: 'https://logo.clearbit.com/sicoob.com.br', color: '#003641' },
-  { keywords: ['sicredi'], logo: 'https://logo.clearbit.com/sicredi.com.br', color: '#006633' },
-  { keywords: ['original'], logo: 'https://logo.clearbit.com/original.com.br', color: '#00A651' },
-  { keywords: ['safra'], logo: 'https://logo.clearbit.com/safra.com.br', color: '#002D62' },
-  { keywords: ['picpay'], logo: 'https://logo.clearbit.com/picpay.com', color: '#21C25E' },
-  { keywords: ['will', 'willbank'], logo: 'https://logo.clearbit.com/willbank.com.br', color: '#FF2D78' },
-  { keywords: ['stone'], logo: 'https://logo.clearbit.com/stone.com.br', color: '#00A868' },
-  { keywords: ['iti'], logo: 'https://logo.clearbit.com/iti.itau', color: '#FF6600' },
-  { keywords: ['binance'], logo: 'https://logo.clearbit.com/binance.com', color: '#F0B90B' },
-  { keywords: ['wise'], logo: 'https://logo.clearbit.com/wise.com', color: '#9FE870' },
-  { keywords: ['paypal'], logo: 'https://logo.clearbit.com/paypal.com', color: '#003087' },
-  { keywords: ['modal'], logo: 'https://logo.clearbit.com/modalmais.com.br', color: '#FF6B00' },
-  { keywords: ['daycoval'], logo: 'https://logo.clearbit.com/daycoval.com.br', color: '#004B87' },
-  { keywords: ['pan'], logo: 'https://logo.clearbit.com/bancopan.com.br', color: '#0066CC' },
-  { keywords: ['bmg'], logo: 'https://logo.clearbit.com/bancobmg.com.br', color: '#F47920' },
-  { keywords: ['sofisa'], logo: 'https://logo.clearbit.com/sofisadireto.com.br', color: '#1E3A5F' },
+  { keywords: ['nubank', 'nu '], logo: 'bank-logos/nubank.png', color: '#820AD1' },
+  { keywords: ['renner', 'realize'], logo: 'bank-logos/renner.png', color: '#E30613' },
+  { keywords: ['carrefour', 'atacadão', 'atacadao'], logo: 'bank-logos/carrefour.svg', color: '#1E5BB8' },
+  { keywords: ['inter', 'banco inter'], logo: 'bank-logos/inter.png', color: '#FF7A00' },
+  { keywords: ['bradesco'], logo: 'bank-logos/bradesco.png', color: '#CC092F' },
+  { keywords: ['itau', 'itaú'], logo: 'bank-logos/itau.png', color: '#003399' },
+  { keywords: ['caixa', 'cef'], logo: 'bank-logos/caixa.png', color: '#005CA9' },
+  { keywords: ['banco do brasil', ' bb', 'bb '], logo: 'bank-logos/bb.png', color: '#FECE00' },
+  { keywords: ['santander'], logo: 'bank-logos/santander.png', color: '#EC0000' },
+  { keywords: ['c6', 'c6 bank'], logo: 'bank-logos/c6.png', color: '#242424' },
+  { keywords: ['pagbank', 'pagseguro'], logo: 'bank-logos/pagbank.png', color: '#00A651' },
+  { keywords: ['mercado pago', 'mercadopago'], logo: 'bank-logos/mercadopago.png', color: '#009EE3' },
+  { keywords: ['neon'], logo: 'bank-logos/neon.png', color: '#0DC5FF' },
+  { keywords: ['next'], logo: 'bank-logos/next.png', color: '#00E68A' },
+  { keywords: ['btg'], logo: 'bank-logos/btg.png', color: '#1A2537' },
+  { keywords: ['xp'], logo: 'bank-logos/xp.png', color: '#000000' },
+  { keywords: ['rico'], logo: 'bank-logos/rico.png', color: '#FF5500' },
+  { keywords: ['sicoob'], logo: 'bank-logos/sicoob.png', color: '#003641' },
+  { keywords: ['sicredi'], logo: 'bank-logos/sicredi.png', color: '#006633' },
+  { keywords: ['original'], logo: 'bank-logos/original.png', color: '#00A651' },
+  { keywords: ['safra'], logo: 'bank-logos/safra.png', color: '#002D62' },
+  { keywords: ['picpay'], logo: 'bank-logos/picpay.png', color: '#21C25E' },
+  { keywords: ['will', 'willbank'], logo: 'bank-logos/will.png', color: '#FF2D78' },
+  { keywords: ['stone'], logo: 'bank-logos/stone.png', color: '#00A868' },
+  { keywords: ['iti'], logo: 'bank-logos/iti.png', color: '#FF6600' },
+  { keywords: ['binance'], logo: 'bank-logos/binance.png', color: '#F0B90B' },
+  { keywords: ['wise'], logo: 'bank-logos/wise.png', color: '#9FE870' },
+  { keywords: ['paypal'], logo: 'bank-logos/paypal.png', color: '#003087' },
+  { keywords: ['modal'], logo: 'bank-logos/modal.png', color: '#FF6B00' },
+  { keywords: ['daycoval'], logo: 'bank-logos/daycoval.png', color: '#004B87' },
+  { keywords: ['pan'], logo: 'bank-logos/pan.png', color: '#0066CC' },
+  { keywords: ['bmg'], logo: 'bank-logos/bmg.png', color: '#F47920' },
+  { keywords: ['sofisa'], logo: 'bank-logos/sofisa.png', color: '#1E3A5F' },
 ];
 
 function getBankLogo(accountName) {
@@ -1721,6 +1743,82 @@ function getBankLogo(accountName) {
     }
   }
   return null;
+}
+
+function openAccountTransactions(accountId) {
+  const account = state.accounts.find(a => a.id === accountId);
+  if (!account) return;
+
+  state.txSearchQuery = '';
+  state.txPagination.currentPage = 1;
+  navigateTo('transactions');
+
+  const search = document.getElementById('tx-search');
+  if (search) search.value = '';
+  const cat = document.getElementById('tx-filter-category');
+  const who = document.getElementById('tx-filter-who');
+  if (cat) cat.value = '';
+  if (who) who.value = '';
+
+  populateTransactionFilters();
+  const accSelect = document.getElementById('tx-filter-account');
+  if (accSelect) accSelect.value = accountId;
+  renderTransactions();
+  document.getElementById('transactions-page')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function bindAccountCardGestures() {
+  document.querySelectorAll('.account-card-enhanced[data-account-id]').forEach(card => {
+    const accountId = card.dataset.accountId;
+    let longTimer = null;
+    let longTriggered = false;
+    let lastTouchUp = 0;
+    let startX = 0;
+    let startY = 0;
+    const isInteractive = target => !!target.closest('button,a,input,select,textarea,label');
+    const cancelLong = () => { if (longTimer) clearTimeout(longTimer); longTimer = null; };
+
+    card.addEventListener('dblclick', e => {
+      if (isInteractive(e.target)) return;
+      e.preventDefault();
+      openAccountTransactions(accountId);
+    });
+
+    card.addEventListener('pointerdown', e => {
+      if (e.pointerType !== 'touch' || isInteractive(e.target)) return;
+      startX = e.clientX;
+      startY = e.clientY;
+      longTriggered = false;
+      cancelLong();
+      longTimer = setTimeout(() => {
+        longTriggered = true;
+        navigator.vibrate?.(25);
+        openAccountTransactions(accountId);
+      }, 550);
+    });
+
+    card.addEventListener('pointermove', e => {
+      if (e.pointerType !== 'touch') return;
+      if (Math.abs(e.clientX - startX) > 12 || Math.abs(e.clientY - startY) > 12) cancelLong();
+    });
+
+    card.addEventListener('pointerup', e => {
+      if (e.pointerType !== 'touch' || isInteractive(e.target)) return;
+      cancelLong();
+      if (longTriggered) { longTriggered = false; return; }
+      const now = Date.now();
+      if (now - lastTouchUp <= 360) {
+        lastTouchUp = 0;
+        e.preventDefault();
+        openAccountTransactions(accountId);
+      } else {
+        lastTouchUp = now;
+      }
+    });
+
+    card.addEventListener('pointercancel', cancelLong);
+    card.addEventListener('pointerleave', e => { if (e.pointerType === 'touch') cancelLong(); });
+  });
 }
 
 function renderAccounts() {
@@ -1878,13 +1976,16 @@ function renderAccounts() {
       }
 
       const bankInfo = getBankLogo(acc.name);
-      const logoHtml = bankInfo
-        ? `<img src="${bankInfo.logo}" alt="" class="bank-logo" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-           <div class="bank-logo-fallback" style="display:none;background:${bankInfo.color}"><i class="fas fa-university"></i></div>`
+      const logoHtml = bankInfo?.logo
+        ? `<div class="bank-logo-wrap" style="background:${bankInfo.color}">
+             <img src="${bankInfo.logo}" alt="Logo ${escapeFamilyHTML(acc.name)}" class="bank-logo" loading="lazy" decoding="async"
+               onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+             <div class="bank-logo-fallback" style="display:none;background:${bankInfo.color}"><i class="fas fa-university"></i></div>
+           </div>`
         : `<div class="bank-logo-fallback" style="background:var(--primary-500,#6366f1)"><i class="fas fa-wallet"></i></div>`;
 
       return `
-          <div class="account-card-enhanced">
+          <div class="account-card-enhanced" data-account-id="${acc.id}" title="Duplo clique/toque ou segure para ver as transações desta conta">
             <div class="acc-main">
               <div class="acc-logo-name">
                 ${logoHtml}
@@ -1898,6 +1999,7 @@ function renderAccounts() {
               <div class="acc-actions-area">
                 <span class="acc-balance ${balance >= 0 ? 'text-income' : 'text-expense'}">${formatCurrency(balance)}</span>
                 <div class="account-card-actions">
+                  <button class="btn-icon" onclick="openMoveTransactionsModal('${acc.id}')" title="Mover lançamentos"><i class="fas fa-exchange-alt"></i></button>
                   <button class="btn-icon" onclick="editAccount('${acc.id}')" title="Editar"><i class="fas fa-pencil-alt"></i></button>
                   <button class="btn-icon" onclick="removeAccount('${acc.id}')" title="Excluir"><i class="fas fa-trash-alt"></i></button>
                 </div>
@@ -1908,6 +2010,7 @@ function renderAccounts() {
     }).join('')}
       </div>`;
   }).join('');
+  bindAccountCardGestures();
 }
 
 // Cleanup function for credit card duplicates
@@ -3785,6 +3888,8 @@ function initNavigation() {
   // Account form
   document.getElementById('account-form')?.addEventListener('submit', handleAccountForm);
 
+  document.getElementById('move-transactions-confirm-btn')?.addEventListener('click', handleMoveTransactions);
+
   // Budget form
   document.getElementById('budget-form')?.addEventListener('submit', handleBudgetForm);
 
@@ -3931,15 +4036,43 @@ function initNavigation() {
   });
 
   document.getElementById('tx-next-page')?.addEventListener('click', () => {
-    const totalItems = state.transactions.length;
+    const totalItems = getFilteredTransactions().length;
     const rowsPerPage = state.txPagination.rowsPerPage === 'all' ? totalItems : parseInt(state.txPagination.rowsPerPage);
-    const totalPages = Math.ceil(totalItems / rowsPerPage);
+    const totalPages = Math.max(1, Math.ceil(totalItems / Math.max(1, rowsPerPage)));
 
     if (state.txPagination.currentPage < totalPages) {
       state.txPagination.currentPage++;
       renderTransactions();
       document.querySelector('.table-container')?.scrollTo({ top: 0, behavior: 'smooth' });
     }
+  });
+
+  const goToTypedPage = (input) => {
+    if (!input || state.txPagination.rowsPerPage === 'all') return;
+    const totalItems = getFilteredTransactions().length;
+    const rowsPerPage = parseInt(state.txPagination.rowsPerPage) || 30;
+    const totalPages = Math.max(1, Math.ceil(totalItems / rowsPerPage));
+    let page = parseInt(input.value, 10);
+    if (!Number.isFinite(page)) page = state.txPagination.currentPage;
+    page = Math.min(totalPages, Math.max(1, page));
+    if (page !== state.txPagination.currentPage) {
+      state.txPagination.currentPage = page;
+      renderTransactions();
+      document.querySelector('.table-container')?.scrollTo({ top: 0, behavior: 'smooth' });
+    } else {
+      input.value = page;
+    }
+  };
+
+  const paginationInfo = document.getElementById('tx-pagination-info');
+  paginationInfo?.addEventListener('keydown', (e) => {
+    if (e.target?.id === 'tx-page-jump' && e.key === 'Enter') {
+      e.preventDefault();
+      goToTypedPage(e.target);
+    }
+  });
+  paginationInfo?.addEventListener('change', (e) => {
+    if (e.target?.id === 'tx-page-jump') goToTypedPage(e.target);
   });
 
   // Danger Zone & Tools
@@ -3962,6 +4095,7 @@ function navigateTo(page) {
     chat: 'Assistente IA'
   };
   document.getElementById('page-title').textContent = titles[page] || page;
+  renderPageData(page, page === 'profile');
 
   // Render chat container conditionally
   const chatContainer = document.getElementById('chat-container');
@@ -4486,6 +4620,73 @@ window.auditCreditCardInstallments = async function() {
     showToast('Erro', 'Falha ao sincronizar parcelas futuras.', 'error');
   }
 };
+
+window.openMoveTransactionsModal = function(sourceAccountId) {
+  const source = state.accounts.find(a => a.id === sourceAccountId);
+  if (!source) return;
+  const txCount = state.transactions.filter(t => t.accountId === sourceAccountId).length;
+  const sourceInput = document.getElementById('move-transactions-source-id');
+  const sourceName = document.getElementById('move-transactions-source-name');
+  const countEl = document.getElementById('move-transactions-count');
+  const targetSelect = document.getElementById('move-transactions-target');
+  const feedback = document.getElementById('move-transactions-feedback');
+  const progress = document.getElementById('move-transactions-progress');
+  const confirmBtn = document.getElementById('move-transactions-confirm-btn');
+  if (!sourceInput || !targetSelect) return;
+  sourceInput.value = sourceAccountId;
+  sourceName.textContent = accLabel(source);
+  countEl.textContent = txCount.toLocaleString('pt-BR');
+  targetSelect.innerHTML = '<option value="">Selecione a conta de destino...</option>' +
+    state.accounts.filter(a => a.id !== sourceAccountId).map(a => '<option value="' + a.id + '">' + accLabel(a) + '</option>').join('');
+  feedback.textContent = '';
+  feedback.className = 'move-transactions-feedback';
+  progress.value = 0;
+  progress.style.display = 'none';
+  confirmBtn.disabled = txCount === 0;
+  confirmBtn.innerHTML = '<i class="fas fa-exchange-alt"></i> Mover ' + txCount.toLocaleString('pt-BR') + ' lançamentos';
+  openModal('move-transactions-modal');
+};
+
+async function handleMoveTransactions() {
+  const sourceId = document.getElementById('move-transactions-source-id').value;
+  const targetId = document.getElementById('move-transactions-target').value;
+  const feedback = document.getElementById('move-transactions-feedback');
+  const progress = document.getElementById('move-transactions-progress');
+  const btn = document.getElementById('move-transactions-confirm-btn');
+  const source = state.accounts.find(a => a.id === sourceId);
+  const target = state.accounts.find(a => a.id === targetId);
+  const txs = state.transactions.filter(t => t.accountId === sourceId);
+  if (!source || !target) { feedback.textContent = 'Selecione uma conta de destino.'; feedback.className = 'move-transactions-feedback error'; return; }
+  if (!txs.length) { feedback.textContent = 'Esta conta não possui lançamentos para mover.'; feedback.className = 'move-transactions-feedback error'; return; }
+  if (!confirm('Mover ' + txs.length.toLocaleString('pt-BR') + ' lançamentos de "' + accLabel(source) + '" para "' + accLabel(target) + '"?\n\nOs lançamentos não serão duplicados.')) return;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Movendo...';
+  progress.style.display = '';
+  progress.value = 0;
+  feedback.textContent = 'Preparando movimentação...';
+  feedback.className = 'move-transactions-feedback';
+  try {
+    await moveTransactionsBatch(txs.map(t => t.id), targetId, (done, total) => {
+      progress.value = total ? Math.round(done / total * 100) : 0;
+      feedback.textContent = done.toLocaleString('pt-BR') + ' de ' + total.toLocaleString('pt-BR') + ' lançamentos movidos...';
+    });
+    state.transactions.forEach(t => { if (t.accountId === sourceId) t.accountId = targetId; });
+    state.accounts = calculateBalances(state.accounts, state.transactions);
+    renderLoadedData(false);
+    feedback.textContent = txs.length.toLocaleString('pt-BR') + ' lançamentos movidos com sucesso.';
+    feedback.className = 'move-transactions-feedback success';
+    showToast('Lançamentos movidos!', txs.length.toLocaleString('pt-BR') + ' itens enviados para ' + accLabel(target) + '.', 'success');
+    setTimeout(() => closeModal('move-transactions-modal'), 700);
+    await loadAllData();
+  } catch (error) {
+    console.error('Erro ao mover lançamentos:', error);
+    feedback.textContent = error?.message || 'Não foi possível mover os lançamentos.';
+    feedback.className = 'move-transactions-feedback error';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-exchange-alt"></i> Mover lançamentos';
+  }
+}
 
 async function handleAccountForm(e) {
   e.preventDefault();

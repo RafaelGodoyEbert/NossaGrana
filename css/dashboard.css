@@ -577,9 +577,8 @@
   height: 36px;
   border-radius: 10px;
   object-fit: contain;
-  background: #fff;
-  padding: 4px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+  background: transparent;
+  padding: 5px;
   flex-shrink: 0;
 }
 .account-card-enhanced .bank-logo-fallback {
@@ -656,3 +655,20 @@
 .payment-method-badge.debito { background: #dbeafe; color: #2563eb; }
 .payment-method-badge.transferencia { background: #fef3c7; color: #d97706; }
 .payment-method-badge.outros { background: var(--bg-tertiary); color: var(--text-muted); }
+
+.account-card-enhanced .bank-logo-wrap { width:36px; height:36px; border-radius:10px; overflow:hidden; flex:0 0 36px; display:flex; align-items:center; justify-content:center; }
+.account-card-enhanced .bank-logo-wrap .bank-logo { width:36px; height:36px; margin:0; }
+.account-card-enhanced .bank-logo-wrap .bank-logo-fallback { width:36px; height:36px; }
+
+
+.account-card-enhanced[data-account-id] {
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+}
+.account-card-enhanced[data-account-id]:hover {
+  border-color: color-mix(in srgb, var(--primary-color) 45%, var(--border-color));
+}
+.account-card-enhanced[data-account-id]:active {
+  transform: scale(0.998);
+}

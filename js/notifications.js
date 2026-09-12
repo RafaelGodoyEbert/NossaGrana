@@ -76,8 +76,7 @@ export function listenNotifications(userId, callback) {
 
   return db.collection('notifications')
     .where('userId', '==', userId)
-    .orderBy('createdAt', 'desc')
-    .limit(50) // Limitar histórico
+    .limit(100)
     .onSnapshot(
       (snapshot) => {
         const notifications = [];
@@ -104,7 +103,12 @@ export function listenNotifications(userId, callback) {
           }
         });
 
-        callback(notifications, hasNewUnread);
+        notifications.sort((a, b) => {
+          const av = a.createdAt?.toMillis ? a.createdAt.toMillis() : new Date(a.createdAt || 0).getTime();
+          const bv = b.createdAt?.toMillis ? b.createdAt.toMillis() : new Date(b.createdAt || 0).getTime();
+          return bv - av;
+        });
+        callback(notifications.slice(0, 50), hasNewUnread);
       },
       (error) => {
         console.error('Erro ao escutar notificações:', error);

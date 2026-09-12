@@ -56,3 +56,13 @@ try {
 
 export const db = dbInstance;
 export const auth = authInstance;
+
+// Let Firestore keep queued writes across reloads and resume them after reconnecting.
+export let offlinePersistenceEnabled = false;
+export const firestoreReady = dbInstance
+  ? dbInstance.enablePersistence({ synchronizeTabs: true }).then(() => {
+      offlinePersistenceEnabled = true;
+    }).catch(error => {
+      console.warn('Armazenamento offline indisponível; mantenha a aba aberta durante o envio.', error.code);
+    })
+  : Promise.resolve();

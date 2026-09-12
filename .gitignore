@@ -4,3 +4,8 @@ dist/
 .firebase/
 .env*
 *.copy
+/tests
+/dist
+/dist
+/dist/assets
+/dist/assets

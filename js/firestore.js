@@ -22,35 +22,77 @@ function isDemo() { return !db; }
 // ============================
 // Fetch All Data
 // ============================
-export async function fetchAllData(familyId) {
+export async function fetchAllData(familyId, access = null) {
+  const empty = { userAccounts: [], userTransactions: [], userBudgets: [], userGoals: [], userFixedBills: [] };
+  if (access?.denied) return empty;
+
   if (isDemo()) {
-    return {
+    const all = {
       userAccounts: demoData.accounts.filter(a => a.familyId === familyId),
       userTransactions: demoData.transactions.filter(t => t.familyId === familyId),
       userBudgets: demoData.budgets.filter(b => b.familyId === familyId),
       userGoals: demoData.goals.filter(g => g.familyId === familyId),
       userFixedBills: demoData.fixedBills.filter(f => f.familyId === familyId)
     };
+    if (!access?.restricted) return all;
+    const allowedIds = new Set(access.scope === 'all' ? all.userAccounts.map(a => a.id) : access.accountIds);
+    const withinDate = t => {
+      const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
+      return (!access.from || d >= access.from) && (!access.until || d <= access.until);
+    };
+    return {
+      userAccounts: all.userAccounts.filter(a => allowedIds.has(a.id)),
+      userTransactions: all.userTransactions.filter(t => allowedIds.has(t.accountId) && withinDate(t)),
+      userBudgets: [], userGoals: [], userFixedBills: []
+    };
   }
 
   try {
-    const [accs, txs, buds, goals, bills] = await Promise.all([
-      db.collection('accounts').where('familyId', '==', familyId).get(),
-      db.collection('transactions').where('familyId', '==', familyId).get(),
-      db.collection('budgets').where('familyId', '==', familyId).get(),
-      db.collection('goals').where('familyId', '==', familyId).get(),
-      db.collection('fixedBills').where('familyId', '==', familyId).get()
-    ]);
+    if (!access?.restricted) {
+      const [accs, txs, buds, goals, bills] = await Promise.all([
+        db.collection('accounts').where('familyId', '==', familyId).get(),
+        db.collection('transactions').where('familyId', '==', familyId).get(),
+        db.collection('budgets').where('familyId', '==', familyId).get(),
+        db.collection('goals').where('familyId', '==', familyId).get(),
+        db.collection('fixedBills').where('familyId', '==', familyId).get()
+      ]);
+      return {
+        userAccounts: accs.docs.map(d => ({ id: d.id, ...d.data() })),
+        userTransactions: txs.docs.map(d => ({ id: d.id, ...d.data() })),
+        userBudgets: buds.docs.map(d => ({ id: d.id, ...d.data() })),
+        userGoals: goals.docs.map(d => ({ id: d.id, ...d.data() })),
+        userFixedBills: bills.docs.map(d => ({ id: d.id, ...d.data() }))
+      };
+    }
+
+    let userAccounts = [];
+    if (access.scope === 'all') {
+      const accs = await db.collection('accounts').where('familyId', '==', familyId).get();
+      userAccounts = accs.docs.map(d => ({ id: d.id, ...d.data() }));
+    } else {
+      const docs = await Promise.all(access.accountIds.map(id => db.collection('accounts').doc(id).get()));
+      userAccounts = docs.filter(d => d.exists && d.data().familyId === familyId).map(d => ({ id: d.id, ...d.data() }));
+    }
+
+    const txSnapshots = await Promise.all(userAccounts.map(account => {
+      let query = db.collection('transactions').where('accountId', '==', account.id);
+      if (access.from) query = query.where('date', '>=', access.from);
+      if (access.until) query = query.where('date', '<=', access.until);
+      return query.get();
+    }));
+    const txMap = new Map();
+    txSnapshots.forEach(snapshot => snapshot.docs.forEach(doc => txMap.set(doc.id, { id: doc.id, ...doc.data() })));
+
     return {
-      userAccounts: accs.docs.map(d => ({ id: d.id, ...d.data() })),
-      userTransactions: txs.docs.map(d => ({ id: d.id, ...d.data() })),
-      userBudgets: buds.docs.map(d => ({ id: d.id, ...d.data() })),
-      userGoals: goals.docs.map(d => ({ id: d.id, ...d.data() })),
-      userFixedBills: bills.docs.map(d => ({ id: d.id, ...d.data() }))
+      userAccounts,
+      userTransactions: [...txMap.values()],
+      userBudgets: [],
+      userGoals: [],
+      userFixedBills: []
     };
   } catch (error) {
     console.error('Erro ao buscar dados:', error);
-    return { userAccounts: [], userTransactions: [], userBudgets: [], userGoals: [], userFixedBills: [] };
+    throw error;
   }
 }
 
@@ -110,8 +152,11 @@ export const deleteTransaction = (docId) => deleteDoc('transactions', docId);
  * @param {function} onProgress - Callback(saved, total) for progress updates
  * @returns {Promise<number>} Number of saved transactions
  */
-export async function saveTransactionsBatch(transactions, onProgress) {
+export async function saveTransactionsBatch(transactions, onProgress, { queueLocally = false, accounts = [] } = {}) {
   if (isDemo()) {
+    for (const account of accounts) {
+      if (!demoData.accounts.some(a => a.id === account.id)) demoData.accounts.push(account);
+    }
     let saved = 0;
     for (const data of transactions) {
       if (data.id) {
@@ -133,30 +178,58 @@ export async function saveTransactionsBatch(transactions, onProgress) {
     return saved;
   }
 
-  const BATCH_SIZE = 500;
+  const BATCH_SIZE = 200;
   let saved = 0;
+  let failed = 0;
+  let queued = 0;
+  const completions = [];
+  const errors = [];
+  const progress = () => onProgress?.(saved, transactions.length, { failed, queued });
 
   for (let i = 0; i < transactions.length; i += BATCH_SIZE) {
     const chunk = transactions.slice(i, i + BATCH_SIZE);
     const batch = db.batch();
-
-    for (const data of chunk) {
-      if (data.id) {
-        const ref = db.collection('transactions').doc(data.id);
-        const dataCopy = { ...data };
-        delete dataCopy.id; // avoid saving id as field if you don't want to
-        batch.set(ref, dataCopy, { merge: true });
-      } else {
-        const ref = db.collection('transactions').doc();
-        batch.set(ref, data);
+    if (i === 0) {
+      for (const account of accounts) {
+        const { id, ...data } = account;
+        batch.set(db.collection('accounts').doc(id), data, { merge: true });
       }
     }
-
-    await batch.commit();
-    saved += chunk.length;
-    if (onProgress) onProgress(saved, transactions.length);
+    for (const data of chunk) {
+      const ref = data.id ? db.collection('transactions').doc(data.id) : db.collection('transactions').doc();
+      // Keep the allocated ID for a safe retry of this same input.
+      data.id = ref.id;
+      const { id, ...payload } = data;
+      batch.set(ref, payload, { merge: true });
+    }
+    queued += chunk.length;
+    // The full Firestore SDK queues these writes locally and manages network retries.
+    // Completion counts only server acknowledgements, never just local writes.
+    const completion = batch.commit().then(() => {
+      saved += chunk.length;
+      progress();
+    }).catch(error => {
+      failed += chunk.length;
+      errors.push(error);
+      progress();
+    });
+    completions.push(completion);
+    progress();
+    if (queueLocally) {
+      await new Promise(resolve => setTimeout(resolve, 0)); // Let previews and input stay responsive.
+    } else {
+      await completion;
+      if (errors.length) break;
+    }
   }
-
+  await Promise.all(completions);
+  if (errors.length) {
+    const error = new Error(saved + ' de ' + transactions.length + ' transações confirmadas. ' + failed + ' falharam. ' + errors[0].message);
+    error.code = errors[0].code;
+    error.saved = saved;
+    error.failed = failed;
+    throw error;
+  }
   return saved;
 }
 
@@ -237,19 +310,49 @@ export async function saveUserProfile(userId, data) {
 
 export async function createFamily(familyId, data) {
   if (isDemo()) {
-    demoData.families[familyId] = data;
+    demoData.families[familyId] = { id: familyId, ...data };
     return;
   }
-  await db.collection('families').doc(familyId).set(data);
+  const batch = db.batch();
+  batch.set(db.collection('families').doc(familyId), data);
+  if (data.inviteCode) {
+    batch.set(db.collection('familyInvites').doc(String(data.inviteCode).toUpperCase()), {
+      familyId,
+      createdBy: data.createdBy,
+      createdAt: data.createdAt || new Date().toISOString()
+    }, { merge: true });
+  }
+  await batch.commit();
+}
+
+export async function ensureFamilyInvite(family) {
+  if (!family?.id || !family?.inviteCode || isDemo()) return;
+  await db.collection('familyInvites').doc(String(family.inviteCode).toUpperCase()).set({
+    familyId: family.id,
+    createdBy: family.createdBy,
+    updatedAt: new Date().toISOString()
+  }, { merge: true });
 }
 
 export async function getFamilyByInviteCode(code) {
   if (isDemo()) {
-    return Object.entries(demoData.families).find(([_, f]) => f.inviteCode === code)?.[1] || null;
+    const entry = Object.entries(demoData.families).find(([_, f]) => f.inviteCode === code);
+    return entry ? { id: entry[0], ...entry[1] } : null;
   }
-  const snap = await db.collection('families').where('inviteCode', '==', code).limit(1).get();
-  if (snap.empty) return null;
-  return { id: snap.docs[0].id, ...snap.docs[0].data() };
+  const doc = await db.collection('familyInvites').doc(String(code).toUpperCase()).get();
+  return doc.exists ? { id: doc.data().familyId, inviteCode: String(code).toUpperCase() } : null;
+}
+
+export async function joinFamily(familyId, userId) {
+  if (isDemo()) {
+    const family = demoData.families[familyId];
+    if (!family) throw new Error('Família não encontrada');
+    family.members = [...new Set([...(family.members || []), userId])];
+    return;
+  }
+  await db.collection('families').doc(familyId).update({
+    members: firebase.firestore.FieldValue.arrayUnion(userId)
+  });
 }
 
 export async function getFamily(familyId) {

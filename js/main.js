@@ -1,16 +1,19 @@
 // js/main.js — Bootstrap principal do NossaGrana
-import { auth, db, isFirebaseConfigured, saveFirebaseConfig } from '../firebase-config.js';
+import { auth, db, firestoreReady, offlinePersistenceEnabled, isFirebaseConfigured, saveFirebaseConfig } from '../firebase-config.js';
 import {
   fetchAllData, saveTransaction, saveTransactionsBatch, deleteTransaction,
   saveAccount, deleteAccount, saveBudget, deleteBudget,
   saveGoal, deleteGoal, saveFixedBill, deleteFixedBill,
   getUserProfile, saveUserProfile,
-  createFamily, getFamilyByInviteCode, getFamily, updateFamily,
+  createFamily, getFamilyByInviteCode, getFamily, updateFamily, joinFamily, ensureFamilyInvite,
   calculateBalances, resetFamilyData, deleteTransactionsBatch
 } from './firestore.js';
 import { formatCurrency, formatDate, showToast, todayString, generateInviteCode, getGreeting } from './utils.js';
 import { initChat } from './chat/chat-ui.js';
 import { initImport } from './import-ofx.js';
+import { importDocumentId } from './import-identity.js';
+import { getTransactionSummary, createTransactionStatement } from './transaction-statement.js';
+import { normalizeFamilyAccess, formatFamilyAccessSummary } from './family-access.js';
 import { getGeminiKey } from './chat/ai-gemini.js';
 import { getOpenAIKey } from './chat/ai-openai.js';
 import { listenNotifications, requestNotificationPermission, markAsRead, notifyPartner } from './notifications.js';
@@ -23,6 +26,7 @@ const state = {
   profile: null,
   familyId: null,
   family: null,
+  familyAccess: null,
   accounts: [],
   transactions: [],
   budgets: [],
@@ -81,6 +85,8 @@ function initAuth() {
       if (user) {
         await onUserLoggedIn(user);
       } else {
+        stopDataListeners();
+        state.importSync = null;
         showAuthScreen();
       }
     });
@@ -205,6 +211,9 @@ async function handleLogout() {
 }
 
 async function onUserLoggedIn(user, isDemo = false) {
+  stopDataListeners();
+  // Offline persistence is an optimization; never block login/F5 on IndexedDB.
+  firestoreReady.catch(error => console.warn('Persistência offline indisponível:', error));
   state.user = user;
 
   // Check for pending invite
@@ -224,19 +233,15 @@ async function onUserLoggedIn(user, isDemo = false) {
       const inviteCode = generateInviteCode();
 
       if (pending) {
-        // Join existing family
+        // Join existing family without reading its private data first.
         const invite = JSON.parse(pending);
-        const family = await getFamily(invite.familyId);
-        if (family) {
-          family.members = [...(family.members || []), user.uid];
-          await updateFamily(invite.familyId, { members: family.members });
-          profile = {
-            name: user.displayName || user.email.split('@')[0],
-            email: user.email, familyId: invite.familyId, role: 'member',
-            createdAt: new Date().toISOString()
-          };
-          localStorage.removeItem('pending_invite');
-        }
+        await joinFamily(invite.familyId, user.uid);
+        profile = {
+          name: user.displayName || user.email.split('@')[0],
+          email: user.email, familyId: invite.familyId, role: 'member',
+          createdAt: new Date().toISOString()
+        };
+        localStorage.removeItem('pending_invite');
       }
 
       if (!profile) {
@@ -246,26 +251,48 @@ async function onUserLoggedIn(user, isDemo = false) {
 
       await saveUserProfile(user.uid, profile);
     } else if (pending) {
-      // Existing user joining a family
+      // Existing user joining a family.
       const invite = JSON.parse(pending);
-      const family = await getFamily(invite.familyId);
-      if (family && !family.members.includes(user.uid)) {
-        family.members.push(user.uid);
-        await updateFamily(invite.familyId, { members: family.members });
-        profile.familyId = invite.familyId;
-        profile.role = 'member';
-        await saveUserProfile(user.uid, profile);
-        localStorage.removeItem('pending_invite');
-      }
+      await joinFamily(invite.familyId, user.uid);
+      profile.familyId = invite.familyId;
+      profile.role = 'member';
+      await saveUserProfile(user.uid, profile);
+      localStorage.removeItem('pending_invite');
     }
 
     state.profile = profile;
     state.familyId = profile.familyId;
   }
 
-  state.family = await getFamily(state.familyId);
+  try {
+    state.family = await getFamily(state.familyId);
+  } catch (error) {
+    if (error?.code === 'permission-denied') {
+      // Removed with no retained access: start a fresh personal family so the user is not locked out.
+      const familyId = 'fam-' + generateInviteCode();
+      const inviteCode = generateInviteCode();
+      await createFamily(familyId, {
+        inviteCode, members: [user.uid], createdAt: new Date().toISOString(), createdBy: user.uid
+      });
+      state.profile = { ...state.profile, familyId, role: 'admin' };
+      state.familyId = familyId;
+      await saveUserProfile(user.uid, { familyId, role: 'admin' });
+      state.family = await getFamily(familyId);
+      showToast('Acesso anterior encerrado', 'Você foi removido(a) da família anterior. Criamos uma área pessoal nova para sua conta.', 'info');
+    } else {
+      throw error;
+    }
+  }
+  if (!state.family) {
+    throw new Error('Família não encontrada.');
+  }
+  state.familyAccess = normalizeFamilyAccess(state.family, state.user.uid);
+  if (state.familyAccess.isAdmin) {
+    ensureFamilyInvite(state.family).catch(error => console.warn('Convite não sincronizado:', error));
+  }
   showMainApp();
   await loadAllData();
+  startDataListeners();
 
   if (!isDemo) {
     if (await requestNotificationPermission()) {
@@ -279,7 +306,13 @@ async function onUserLoggedIn(user, isDemo = false) {
 // Data Loading
 // ============================
 async function loadAllData() {
-  const data = await fetchAllData(state.familyId);
+  let data;
+  try {
+    data = await fetchAllData(state.familyId, state.familyAccess);
+  } catch (error) {
+    showToast('Não foi possível atualizar', 'Os dados já carregados foram mantidos. Verifique sua conexão.', 'warning');
+    return false;
+  }
   state.accounts = calculateBalances(data.userAccounts, data.userTransactions);
   state.transactions = data.userTransactions;
   state.budgets = data.userBudgets;
@@ -288,28 +321,23 @@ async function loadAllData() {
 
 
   state.familyProfiles = {};
-  if (state.family && state.family.members) {
-    for (const uid of state.family.members) {
-      if (uid === state.user.uid) {
-        state.familyProfiles[uid] = state.profile;
-      } else {
-        const p = await getUserProfile(uid);
-        if (p) state.familyProfiles[uid] = p;
-      }
+  if (state.family) {
+    const profileIds = [...new Set([
+      ...(state.family.members || []),
+      ...Object.keys(state.family.accessGrants || {})
+    ])];
+    const others = profileIds.filter(uid => uid !== state.user.uid);
+    state.familyProfiles[state.user.uid] = state.profile;
+    const profiles = await Promise.all(others.map(async uid => {
+      try { return [uid, await getUserProfile(uid)]; }
+      catch (error) { console.warn('Perfil familiar não carregado:', uid, error?.code || error); return [uid, null]; }
+    }));
+    for (const [uid, profile] of profiles) {
+      if (profile) state.familyProfiles[uid] = profile;
     }
   }
 
-  state.userName = state.profile?.name || 'Usuário';
-  renderDashboard();
-  renderTransactions();
-  renderAccounts();
-  renderBudgets();
-  renderGoals();
-  renderFixedBills();
-  renderProfile();
-  renderReports();
-  renderPayables();
-  renderCategories();
+  renderLoadedData();
 
   // Init Chat
   initChat(state, handleChatTransaction, handleChatInstallment);
@@ -324,6 +352,186 @@ async function loadAllData() {
   );
 }
 
+
+function renderLoadedData(refreshProfile = true) {
+  state.userName = state.profile?.name || 'Usuário';
+  renderDashboard();
+  renderTransactions();
+  renderAccounts();
+  renderBudgets();
+  renderGoals();
+  renderFixedBills();
+  if (refreshProfile) renderProfile();
+  renderReports();
+  renderPayables();
+  renderCategories();
+  renderFamilyAccessStatus();
+
+}
+
+let dataListeners = [];
+let dataRenderTimer;
+
+function stopDataListeners() {
+  dataListeners.forEach(stop => stop());
+  dataListeners = [];
+  clearTimeout(dataRenderTimer);
+  state.pendingTransactionCount = 0;
+}
+
+function startRestrictedDataListeners() {
+  const access = state.familyAccess;
+  const familyId = state.familyId;
+  const userId = state.user.uid;
+  const currentSession = () => state.familyId === familyId && state.user?.uid === userId;
+  const txByAccount = new Map();
+  const accountById = new Map(state.accounts.map(a => [a.id, a]));
+  const redraw = () => {
+    if (!currentSession()) return;
+    state.accounts = calculateBalances([...accountById.values()], state.transactions);
+    renderLoadedData(false);
+  };
+  const refreshTransactions = () => {
+    state.transactions = [...txByAccount.values()].flat();
+    state.pendingTransactionCount = state.transactions.filter(t => t._pendingWrite).length;
+    renderImportSyncStatus();
+    redraw();
+  };
+
+  if (access.scope === 'all') {
+    dataListeners.push(db.collection('accounts').where('familyId', '==', familyId).onSnapshot(snapshot => {
+      if (!currentSession()) return;
+      accountById.clear();
+      snapshot.docs.forEach(doc => accountById.set(doc.id, { id: doc.id, ...doc.data() }));
+      redraw();
+    }, error => currentSession() && showToast('Contas não atualizadas', error.message, 'warning')));
+  } else {
+    access.accountIds.forEach(accountId => {
+      dataListeners.push(db.collection('accounts').doc(accountId).onSnapshot(doc => {
+        if (!currentSession()) return;
+        if (doc.exists && doc.data().familyId === familyId) accountById.set(doc.id, { id: doc.id, ...doc.data() });
+        else accountById.delete(accountId);
+        redraw();
+      }, error => currentSession() && showToast('Conta não atualizada', error.message, 'warning')));
+    });
+  }
+
+  state.accounts.forEach(account => {
+    let query = db.collection('transactions').where('accountId', '==', account.id);
+    if (access.from) query = query.where('date', '>=', access.from);
+    if (access.until) query = query.where('date', '<=', access.until);
+    dataListeners.push(query.onSnapshot({ includeMetadataChanges: true }, snapshot => {
+      if (!currentSession()) return;
+      txByAccount.set(account.id, snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        _pendingWrite: doc.metadata.hasPendingWrites
+      })));
+      refreshTransactions();
+    }, error => currentSession() && showToast('Sincronização limitada indisponível', error.message, 'warning')));
+  });
+}
+
+function startDataListeners() {
+  stopDataListeners();
+  if (!db) return;
+  if (state.familyAccess?.restricted) {
+    startRestrictedDataListeners();
+    return;
+  }
+  const familyId = state.familyId;
+  const userId = state.user.uid;
+  const currentSession = () => state.familyId === familyId && state.user?.uid === userId;
+  const redraw = () => {
+    clearTimeout(dataRenderTimer);
+    dataRenderTimer = setTimeout(() => {
+      if (!currentSession()) return;
+      state.accounts = calculateBalances(state.accounts, state.transactions);
+      renderLoadedData(false);
+    }, 100);
+  };
+  dataListeners.push(db.collection('transactions').where('familyId', '==', familyId)
+    .onSnapshot({ includeMetadataChanges: true }, snapshot => {
+      if (!currentSession()) return;
+      // An empty, incomplete cache must not erase an already loaded server result.
+      if (snapshot.metadata.fromCache && snapshot.empty && state.transactions.length) return;
+      state.transactions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      state.pendingTransactionCount = snapshot.docs.filter(doc => doc.metadata.hasPendingWrites).length;
+      renderImportSyncStatus();
+      if (snapshot.docChanges({ includeMetadataChanges: false }).length) redraw();
+    }, error => {
+      if (currentSession()) showToast('Sincronização indisponível', error.message, 'warning');
+    }));
+  dataListeners.push(db.collection('accounts').where('familyId', '==', familyId)
+    .onSnapshot(snapshot => {
+      if (!currentSession()) return;
+      if (snapshot.metadata.fromCache && snapshot.empty && state.accounts.length) return;
+      state.accounts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      redraw();
+    }, error => {
+      if (currentSession()) showToast('Contas não atualizadas', error.message, 'warning');
+    }));
+}
+
+function renderFamilyAccessStatus() {
+  const banner = document.getElementById('family-access-status');
+  if (!banner) return;
+  const access = state.familyAccess;
+  const visible = access && !access.denied && (access.restricted || access.readOnly);
+  banner.classList.toggle('hidden', !visible);
+  document.body.classList.toggle('family-readonly', !!access?.readOnly);
+  if (!visible) return;
+
+  const title = document.getElementById('family-access-title');
+  const detail = document.getElementById('family-access-detail');
+  title.textContent = access.readOnly ? 'Acesso histórico (somente leitura)' : 'Acesso limitado';
+  detail.textContent = formatFamilyAccessSummary(access, state.accounts)
+    + (access.readOnly ? '. Você não pode alterar os dados desta família.' : '.');
+
+  const writeIds = ['add-transaction-btn','add-account-btn','add-fixed-bill-btn','add-budget-btn','add-goal-btn','import-file-input','batch-categorize-btn','ai-auto-categorize-btn','btn-reset-data'];
+  writeIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !!access.readOnly;
+  });
+}
+
+function renderImportSyncStatus() {
+  const banner = document.getElementById('import-sync-status');
+  if (!banner) return;
+  const status = state.importSync;
+  const pending = state.pendingTransactionCount || 0;
+  const busy = status?.phase === 'preparing' || status?.phase === 'sending';
+  const fileInput = document.getElementById('import-file-input');
+  if (fileInput) fileInput.disabled = busy || pending > 0;
+  banner.classList.toggle('hidden', !status && !pending);
+  if (!status && !pending) return;
+  banner.dataset.status = status?.phase || 'sending';
+  const title = document.getElementById('import-sync-title');
+  const detail = document.getElementById('import-sync-detail');
+  const progress = document.getElementById('import-sync-progress');
+  progress.value = status?.total ? Math.round(status.saved / status.total * 100) : 0;
+  if (status?.phase === 'error') {
+    title.textContent = 'Envio incompleto';
+    detail.textContent = status.message;
+  } else if (status?.phase === 'success') {
+    title.textContent = 'Sincronizado';
+    detail.textContent = status.total + ' transações confirmadas no servidor e disponíveis para o celular.';
+  } else if (status?.phase === 'preparing') {
+    title.textContent = 'Preparando a importação';
+    detail.textContent = 'Você pode continuar navegando enquanto os lançamentos são preparados.';
+    progress.removeAttribute('value');
+  } else {
+    title.textContent = navigator.onLine ? 'Enviando ao servidor' : 'Aguardando conexão';
+    const counts = status ? status.saved + ' de ' + status.total + ' confirmadas no servidor. ' : pending + ' alterações aguardando confirmação. ';
+    detail.textContent = counts + (offlinePersistenceEnabled
+      ? 'O Firebase guarda o envio neste dispositivo e retoma ao reconectar. Você pode continuar usando o app.'
+      : 'Mantenha esta aba aberta até concluir: o armazenamento offline não está disponível neste navegador.');
+    if (!status) progress.removeAttribute('value');
+  }
+}
+
+window.addEventListener('online', renderImportSyncStatus);
+window.addEventListener('offline', renderImportSyncStatus);
 
 /**
  * Paga a fatura do ciclo anterior (fatura fechada / Fatura Atual).
@@ -512,6 +720,17 @@ async function handleChatInstallment(txData) {
 // Import Handler
 // ============================
 async function handleImportedTransactions(importedTxs, accountId, userId) {
+  if (state.importSync?.phase === 'preparing' || state.importSync?.phase === 'sending' || state.pendingTransactionCount > 0) {
+    showToast('Envio em andamento', 'Aguarde a sincronização antes de iniciar outro lote.', 'warning');
+    return false;
+  }
+  const sessionUserId = state.user.uid;
+  const sessionFamilyId = state.familyId;
+  const currentSession = () => state.user?.uid === sessionUserId && state.familyId === sessionFamilyId;
+  state.importSync = { phase: 'preparing', saved: 0, total: 0 };
+  renderImportSyncStatus();
+  try {
+  const newAccounts = [];
   const selectedUserId = userId || state.user.uid;
   const selectedUserName = state.familyProfiles?.[selectedUserId]?.name || state.profile?.name || 'Usuário';
 
@@ -539,7 +758,8 @@ async function handleImportedTransactions(importedTxs, accountId, userId) {
           initialBalance: 0,
           creditLimit: 0
         };
-        targetCreditAccountId = await saveAccount(newAccData, null);
+        targetCreditAccountId = await importDocumentId(['account', state.familyId, expectedName]);
+        newAccounts.push({ id: targetCreditAccountId, ...newAccData });
       } else {
         targetCreditAccountId = cAcc.id;
       }
@@ -559,7 +779,8 @@ async function handleImportedTransactions(importedTxs, accountId, userId) {
   };
 
   const existingInsts = [];
-  state.transactions.forEach(ex => {
+  // Reserve installments already present in any of the selected files too.
+  state.transactions.concat(importedTxs).forEach(ex => {
     if (ex.description && (ex.description.includes('/') || ex.installmentInfo)) {
       const normBase = normalizeDesc(ex.description);
       const amountCents = Math.round(ex.amount * 100);
@@ -614,6 +835,7 @@ async function handleImportedTransactions(importedTxs, accountId, userId) {
 
     if (tx.fitid) {
       resultTx.fitid = tx.fitid;
+      if (tx.bankAccountKey) resultTx.bankAccountKey = tx.bankAccountKey;
     }
 
     if (tx.updateTargetId) {
@@ -624,6 +846,8 @@ async function handleImportedTransactions(importedTxs, accountId, userId) {
       resultTx.installmentInfo = tx.installmentInfo;
     }
 
+    // Respect the explicit 'Manter ambos' choice, while normal imports use stable IDs.
+    if (tx.isDuplicate && !tx.updateTargetId) resultTx.id = db ? db.collection('transactions').doc().id : crypto.randomUUID();
     acc.push(resultTx);
 
     // Auto-generate future installments for credit card purchases
@@ -686,48 +910,50 @@ async function handleImportedTransactions(importedTxs, accountId, userId) {
     return acc;
   }, []);
 
-  // Show progress overlay
-  const overlay = document.createElement('div');
-  overlay.id = 'import-progress-overlay';
-  overlay.innerHTML = `
-    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;">
-      <div style="background:var(--bg-secondary,#1e1e2e);border-radius:16px;padding:32px 40px;text-align:center;min-width:340px;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
-        <div style="font-size:2rem;margin-bottom:12px;">📥</div>
-        <h3 style="margin-bottom:8px;">Importando transações...</h3>
-        <p id="import-progress-text" style="color:var(--text-secondary);margin-bottom:16px;">Preparando...</p>
-        <div style="background:var(--bg-tertiary,#2a2a3e);border-radius:8px;height:12px;overflow:hidden;">
-          <div id="import-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--primary-color,#6366f1),var(--accent-color,#a78bfa));border-radius:8px;transition:width 0.3s ease;"></div>
-        </div>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(overlay);
-
-  try {
-    const saved = await saveTransactionsBatch(txDataArray, (done, total) => {
-      const pct = Math.round((done / total) * 100);
-      const bar = document.getElementById('import-progress-bar');
-      const text = document.getElementById('import-progress-text');
-      if (bar) bar.style.width = pct + '%';
-      if (text) text.textContent = `${done} de ${total} transações (${pct}%)`;
-    });
-
-    // Se houver pagamentos de fatura, dispara a liquidação automática do histórico
-    const hasInvoicePayment = txDataArray.some(t => t.invoicePayment);
-    if (hasInvoicePayment) {
-      const accountIds = [...new Set(txDataArray.filter(t => t.invoicePayment).map(t => t.accountId))];
-      for (const accId of accountIds) {
-        await automateInvoiceSettlement(accId);
-      }
+  for (const tx of txDataArray) {
+    if (tx.id) continue;
+    if (tx.fitid) {
+      tx.id = await importDocumentId([tx.familyId, tx.accountId, tx.bankAccountKey || '', 'fitid', tx.fitid]);
+    } else if (tx.installmentInfo) {
+      const d = tx.date.toDate();
+      const purchaseMonth = d.getFullYear() * 12 + d.getMonth() - tx.installmentInfo.current;
+      tx.id = await importDocumentId([tx.familyId, tx.accountId, 'installment', normalizeDesc(tx.description), tx.amount, tx.installmentInfo.current, tx.installmentInfo.total, purchaseMonth]);
+    } else {
+      tx.id = db ? db.collection('transactions').doc().id : crypto.randomUUID();
     }
-
-    showToast(`${saved} transações importadas!`, 'Dados atualizados', 'success');
-  } catch (err) {
-    console.error('Batch import error:', err);
-    showToast('Erro na importação', err.message, 'error');
-  } finally {
-    overlay.remove();
-    await loadAllData();
+  }
+  if (!currentSession()) return false;
+  state.importSync = { phase: 'sending', saved: 0, total: txDataArray.length };
+  renderImportSyncStatus();
+  // Firestore's persistent local queue owns the writes; the server promise runs in the background.
+  saveTransactionsBatch(txDataArray, (saved, total, details) => {
+    if (!currentSession()) return;
+    state.importSync = { phase: 'sending', saved, total, failed: details?.failed || 0 };
+    renderImportSyncStatus();
+  }, { queueLocally: true, accounts: newAccounts }).then(async saved => {
+    if (!currentSession()) return;
+    if (!db) await loadAllData();
+    state.importSync = { phase: 'success', saved, total: txDataArray.length };
+    renderImportSyncStatus();
+    const accountIds = [...new Set(txDataArray.filter(t => t.invoicePayment).map(t => t.accountId))];
+    for (const accId of accountIds) {
+      try { await automateInvoiceSettlement(accId); }
+      catch (error) { showToast('Extrato salvo; fatura não atualizada', error.message, 'warning'); }
+    }
+  }).catch(error => {
+    if (!currentSession()) return;
+    console.error('Import sync error:', error);
+    state.importSync = { phase: 'error', saved: error.saved || 0, total: txDataArray.length,
+      message: error.message + ' Os lançamentos confirmados foram mantidos. Selecione os arquivos novamente para reenviar o restante.' };
+    renderImportSyncStatus();
+  });
+  return true;
+  } catch (error) {
+    if (currentSession()) {
+      state.importSync = { phase: 'error', saved: 0, total: 0, message: error.message };
+      renderImportSyncStatus();
+    }
+    return false;
   }
 }
 
@@ -758,11 +984,7 @@ async function automateInvoiceSettlement(accountId) {
 
   if (txsToUpdate.length > 0) {
     console.log(`Liquidando ${txsToUpdate.length} transações antigas para o cartão ${acc.name}`);
-    const batch = db.batch();
-    txsToUpdate.forEach(t => {
-      batch.update(db.collection('transactions').doc(t.id), { isPaid: true });
-    });
-    await batch.commit();
+    await saveTransactionsBatch(txsToUpdate.map(t => ({ id: t.id, isPaid: true })));
   }
 }
 
@@ -1078,13 +1300,7 @@ function renderDashboardWidgets(txs) {
 // ============================
 // Transactions Page
 // ============================
-function renderTransactions() {
-  const tbody = document.querySelector('#transactions-table tbody');
-  if (!tbody) return;
-
-  // Populate filter dropdowns dynamically
-  populateTransactionFilters();
-
+function getFilteredTransactions() {
   let filtered = [...state.transactions];
 
   // Text search filter
@@ -1122,7 +1338,18 @@ function renderTransactions() {
     });
   }
 
-  const sorted = filtered.sort((a, b) => (b.date?.seconds || 0) - (a.date?.seconds || 0));
+  return filtered.sort((a, b) => (b.date?.seconds || 0) - (a.date?.seconds || 0));
+}
+
+function renderTransactions() {
+  const tbody = document.querySelector('#transactions-table tbody');
+  if (!tbody) return;
+
+  // Populate filter dropdowns dynamically
+  populateTransactionFilters();
+
+  const sorted = getFilteredTransactions();
+  updateSearchSummary(sorted);
 
   if (sorted.length === 0) {
     if (state.txSearchQuery) {
@@ -1131,16 +1358,8 @@ function renderTransactions() {
       tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:32px;">Nenhuma transação ainda</td></tr>';
     }
     updatePaginationUI(0);
-    updateSearchSummary(0, 0);
     return;
   }
-
-  // Handle Search Summary
-  const totalFilteredCount = filtered.length;
-  const totalFilteredAmount = filtered.reduce((acc, t) => {
-    return t.type === 'receita' ? acc + t.amount : acc - t.amount;
-  }, 0);
-  updateSearchSummary(totalFilteredCount, totalFilteredAmount);
 
   // Handle Pagination
   const totalItems = sorted.length;
@@ -1246,16 +1465,21 @@ function updatePaginationUI(totalItems) {
   if (nextBtn) nextBtn.disabled = currentPage >= totalPages || state.txPagination.rowsPerPage === 'all';
 }
 
-function updateSearchSummary(count, total) {
+function updateSearchSummary(transactions) {
   const summaryBar = document.getElementById('tx-summary-bar');
   if (!summaryBar) return;
 
   if (state.txSearchQuery) {
     summaryBar.classList.remove('hidden');
+    const summary = getTransactionSummary(transactions);
+    const total = summary.balance;
+    document.getElementById('tx-summary-income').textContent = formatCurrency(summary.income);
+    document.getElementById('tx-summary-expense').textContent = formatCurrency(summary.expense);
+    document.getElementById('tx-summary-movement').textContent = formatCurrency(summary.movement);
     const countEl = document.getElementById('tx-summary-count');
     const totalEl = document.getElementById('tx-summary-total');
 
-    if (countEl) countEl.textContent = count;
+    if (countEl) countEl.textContent = transactions.length;
     if (totalEl) {
       totalEl.textContent = formatCurrency(total);
       totalEl.className = 'summary-value ' + (total >= 0 ? 'income' : 'expense');
@@ -3180,43 +3404,226 @@ function renderProfile() {
   renderFamilySection();
 }
 
+function escapeFamilyHTML(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[char]);
+}
+
 function renderFamilySection() {
   const inviteArea = document.getElementById('family-invite-area');
   const membersArea = document.getElementById('family-members-area');
+  if (!state.family || !inviteArea || !membersArea) return;
 
-  if (state.family) {
-    inviteArea.innerHTML = `
-      <div class="invite-section">
-        <h4>🔗 Convide seu parceiro(a)</h4>
-        <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:8px;">Compartilhe este código:</p>
-        <div class="invite-code-display">${state.family.inviteCode}</div>
-        <button class="btn btn-secondary" onclick="navigator.clipboard.writeText('${state.family.inviteCode}'); showToast('Copiado!','','success')">
-          <i class="fas fa-copy"></i> Copiar Código
-        </button>
-      </div>
-    `;
+  const isAdmin = state.family.createdBy === state.user.uid;
+  inviteArea.innerHTML = `
+    <div class="invite-section">
+      <h4><i class="fas fa-user-plus"></i> Convide uma pessoa</h4>
+      <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:8px;">Compartilhe este código:</p>
+      <div class="invite-code-display">${escapeFamilyHTML(state.family.inviteCode)}</div>
+      <button class="btn btn-secondary" id="copy-family-invite-btn"><i class="fas fa-copy"></i> Copiar Código</button>
+    </div>
+  `;
+  document.getElementById('copy-family-invite-btn')?.addEventListener('click', () => {
+    navigator.clipboard.writeText(state.family.inviteCode);
+    showToast('Copiado!', '', 'success');
+  });
 
-    const members = state.family.members || [];
-    membersArea.innerHTML = `
-      <h4 style="margin-bottom:12px;">👥 Membros (${members.length})</h4>
-      ${members.map(uid => {
-      const profile = state.familyProfiles?.[uid] || { name: 'Desconhecido', email: '' };
-      const isMe = uid === state.user.uid;
-      const initial = (profile.name || '?')[0].toUpperCase();
-      const avatarContent = profile.photoUrl 
-        ? `<img src="${profile.photoUrl}" alt="${profile.name}" class="member-avatar-img">` 
-        : '';
-      return `
-          <div style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--bg-tertiary);border-radius:8px;margin-bottom:8px;">
-            <div class="user-avatar" style="width:40px;height:40px;font-size:1rem;position:relative;overflow:hidden;">${avatarContent || initial}</div>
-            <div style="display:flex;flex-direction:column;">
-              <span style="font-size:0.95rem;font-weight:600;">${profile.name} ${isMe ? '(você)' : ''}</span>
-              <span style="font-size:0.8rem;color:var(--text-secondary);">${profile.email}</span>
-            </div>
-          </div>
-        `;
-    }).join('')}
-    `;
+  const members = state.family.members || [];
+  const grants = state.family.accessGrants || {};
+  const retainedIds = Object.keys(grants).filter(uid => !members.includes(uid) && grants[uid]?.retainAfterRemoval);
+
+  const memberCard = (uid, historical = false) => {
+    const profile = state.familyProfiles?.[uid] || { name: 'Usuário', email: '' };
+    const isMe = uid === state.user.uid;
+    const access = normalizeFamilyAccess(state.family, uid);
+    const initial = (profile.name || '?')[0].toUpperCase();
+    const avatarContent = profile.photoUrl
+      ? `<img src="${escapeFamilyHTML(profile.photoUrl)}" alt="" class="member-avatar-img">`
+      : escapeFamilyHTML(initial);
+    const actions = isAdmin && !isMe ? `
+      <div class="family-member-actions">
+        <button class="btn btn-sm btn-secondary" onclick="openFamilyAccessModal('${uid}','edit')"><i class="fas fa-sliders-h"></i> Acesso</button>
+        ${historical
+          ? `<button class="btn btn-sm btn-danger" onclick="revokeFamilyAccess('${uid}')"><i class="fas fa-ban"></i> Revogar</button>`
+          : `<button class="btn btn-sm btn-danger" onclick="openFamilyAccessModal('${uid}','remove')"><i class="fas fa-user-minus"></i> Remover</button>`}
+      </div>` : '';
+    return `
+      <div class="family-member-card ${historical ? 'historical' : ''}">
+        <div class="user-avatar family-member-avatar">${avatarContent}</div>
+        <div class="family-member-info">
+          <div class="family-member-name">${escapeFamilyHTML(profile.name)} ${isMe ? '<span class="family-you">(você)</span>' : ''}</div>
+          <div class="family-member-email">${escapeFamilyHTML(profile.email || '')}</div>
+          <div class="family-member-access"><i class="far fa-calendar-alt"></i> ${escapeFamilyHTML(formatFamilyAccessSummary(access, state.accounts))}</div>
+          ${historical ? '<div class="family-history-badge">Ex-membro · acesso histórico</div>' : ''}
+        </div>
+        ${actions}
+      </div>`;
+  };
+
+  membersArea.innerHTML = `
+    <div class="family-section-heading"><h4><i class="fas fa-users"></i> Membros ativos (${members.length})</h4></div>
+    ${members.map(uid => memberCard(uid)).join('')}
+    ${retainedIds.length ? `
+      <div class="family-section-heading family-history-heading"><h4><i class="fas fa-history"></i> Acessos históricos (${retainedIds.length})</h4></div>
+      ${retainedIds.map(uid => memberCard(uid, true)).join('')}
+    ` : ''}
+  `;
+}
+
+function accessDateInputValue(value) {
+  if (!value) return '';
+  const d = value?.toDate ? value.toDate() : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function buildFamilyAccessGrant({ retainAfterRemoval = false } = {}) {
+  const fromValue = document.getElementById('family-access-from').value;
+  const untilValue = document.getElementById('family-access-until').value;
+  const scope = document.getElementById('family-access-scope').value;
+  const accountIds = [...document.querySelectorAll('.family-access-account:checked')].map(el => el.value);
+
+  if (fromValue && untilValue && fromValue > untilValue) {
+    throw new Error('A data inicial não pode ser posterior à data final.');
+  }
+  if (scope === 'accounts' && accountIds.length === 0) {
+    throw new Error('Selecione pelo menos uma conta para o acesso parcial.');
+  }
+  const asStoredDate = (value, endOfDay = false) => {
+    if (!value) return null;
+    const date = new Date(`${value}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}`);
+    return db ? firebase.firestore.Timestamp.fromDate(date) : date.toISOString();
+  };
+  return {
+    scope,
+    accountIds: scope === 'accounts' ? accountIds : [],
+    from: asStoredDate(fromValue),
+    until: asStoredDate(untilValue, true),
+    retainAfterRemoval,
+    updatedAt: db ? firebase.firestore.Timestamp.now() : new Date().toISOString()
+  };
+}
+
+function syncFamilyAccessModal() {
+  const scope = document.getElementById('family-access-scope')?.value;
+  document.getElementById('family-access-accounts-wrap')?.classList.toggle('hidden', scope !== 'accounts');
+  const mode = document.getElementById('family-access-mode')?.value;
+  const policy = document.getElementById('family-remove-policy')?.value;
+  const retain = mode !== 'remove' || policy === 'retain';
+  document.getElementById('family-access-fields')?.classList.toggle('family-access-fields-disabled', !retain);
+  document.querySelectorAll('#family-access-fields input, #family-access-fields select').forEach(el => {
+    el.disabled = !retain;
+  });
+}
+
+window.openFamilyAccessModal = function(uid, mode = 'edit') {
+  if (state.family.createdBy !== state.user.uid) return;
+  const profile = state.familyProfiles?.[uid] || { name: 'Usuário' };
+  const raw = state.family.accessGrants?.[uid] || {};
+  const access = normalizeFamilyAccess(state.family, uid);
+  document.getElementById('family-access-uid').value = uid;
+  document.getElementById('family-access-mode').value = mode;
+  document.getElementById('family-access-member-name').textContent = profile.name || 'Usuário';
+  document.getElementById('family-access-from').value = accessDateInputValue(raw.from);
+  document.getElementById('family-access-until').value = accessDateInputValue(raw.until);
+  document.getElementById('family-access-scope').value = raw.scope === 'accounts' ? 'accounts' : 'all';
+  document.getElementById('family-remove-options').classList.toggle('hidden', mode !== 'remove');
+  document.getElementById('family-remove-policy').value = 'revoke';
+  document.getElementById('family-access-save-btn').innerHTML = mode === 'remove'
+    ? '<i class="fas fa-user-minus"></i> Confirmar remoção'
+    : '<i class="fas fa-save"></i> Salvar acesso';
+
+  const selected = new Set(raw.accountIds || []);
+  document.getElementById('family-access-accounts').innerHTML = state.accounts.map(account => `
+    <label class="family-access-account-item">
+      <input type="checkbox" class="family-access-account" value="${escapeFamilyHTML(account.id)}" ${selected.has(account.id) ? 'checked' : ''}>
+      <span><strong>${escapeFamilyHTML(account.name)}</strong>${account.ownerTag ? `<small>${escapeFamilyHTML(account.ownerTag)}</small>` : ''}</span>
+    </label>
+  `).join('') || '<p class="family-access-empty">Nenhuma conta cadastrada.</p>';
+
+  document.getElementById('family-access-fields').querySelectorAll('input,select').forEach(el => el.disabled = false);
+  syncFamilyAccessModal();
+  openModal('family-access-modal');
+};
+
+window.revokeFamilyAccess = async function(uid) {
+  if (state.family.createdBy !== state.user.uid) return;
+  if (!confirm('Revogar completamente o acesso histórico desta pessoa?')) return;
+  const grants = { ...(state.family.accessGrants || {}) };
+  delete grants[uid];
+  await updateFamily(state.familyId, { accessGrants: grants });
+  state.family = await getFamily(state.familyId);
+  state.familyAccess = normalizeFamilyAccess(state.family, state.user.uid);
+  await loadAllData();
+  showToast('Acesso revogado', 'A pessoa não pode mais consultar os dados desta família.', 'success');
+};
+
+async function saveFamilyAccessModal() {
+  const uid = document.getElementById('family-access-uid').value;
+  const mode = document.getElementById('family-access-mode').value;
+  const grants = { ...(state.family.accessGrants || {}) };
+  const members = [...(state.family.members || [])];
+  const btn = document.getElementById('family-access-save-btn');
+  const feedback = document.getElementById('family-access-feedback');
+  const originalHTML = btn?.innerHTML || '';
+
+  const setFeedback = (message, type = '') => {
+    if (!feedback) return;
+    feedback.textContent = message;
+    feedback.className = 'family-access-feedback' + (type ? ' ' + type : '');
+  };
+
+  try {
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Salvando...';
+    }
+    setFeedback('Salvando permissões no Firebase...');
+
+    let familyPatch;
+    if (mode === 'remove') {
+      const policy = document.getElementById('family-remove-policy').value;
+      const newMembers = members.filter(id => id !== uid);
+      if (policy === 'revoke') delete grants[uid];
+      else grants[uid] = buildFamilyAccessGrant({ retainAfterRemoval: true });
+      familyPatch = { members: newMembers, accessGrants: grants };
+    } else {
+      const active = members.includes(uid);
+      grants[uid] = buildFamilyAccessGrant({ retainAfterRemoval: !active });
+      familyPatch = { accessGrants: grants };
+    }
+
+    await updateFamily(state.familyId, familyPatch);
+    state.family = { ...state.family, ...familyPatch };
+    state.familyAccess = normalizeFamilyAccess(state.family, state.user.uid);
+    renderFamilySection();
+    setFeedback('Permissões salvas com sucesso.', 'success');
+
+    try {
+      const refreshedFamily = await getFamily(state.familyId);
+      if (refreshedFamily) state.family = refreshedFamily;
+      state.familyAccess = normalizeFamilyAccess(state.family, state.user.uid);
+      await loadAllData();
+      startDataListeners();
+    } catch (refreshError) {
+      console.warn('Permissão salva, mas a atualização da tela falhou:', refreshError);
+    }
+
+    showToast(
+      mode === 'remove' ? 'Pessoa removida' : 'Acesso atualizado',
+      mode === 'remove' ? 'As permissões da pessoa foram atualizadas.' : 'O período e o escopo foram salvos no Firebase.',
+      'success'
+    );
+    setTimeout(() => closeModal('family-access-modal'), 500);
+  } catch (error) {
+    console.error('Family access save error:', error);
+    const detail = error?.code ? error.code + ': ' + error.message : (error?.message || String(error));
+    setFeedback('Erro ao salvar: ' + detail, 'error');
+    showToast('Não foi possível salvar', detail, 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = originalHTML;
+    }
   }
 }
 
@@ -3446,6 +3853,9 @@ function initNavigation() {
   });
   document.getElementById('profile-photo-input')?.addEventListener('change', handleProfilePhotoUpload);
   document.getElementById('profile-photo-remove-btn')?.addEventListener('click', handleProfilePhotoRemove);
+  document.getElementById('family-access-scope')?.addEventListener('change', syncFamilyAccessModal);
+  document.getElementById('family-remove-policy')?.addEventListener('change', syncFamilyAccessModal);
+  document.getElementById('family-access-save-btn')?.addEventListener('click', saveFamilyAccessModal);
 
   // Change password form
   document.getElementById('change-password-form')?.addEventListener('submit', handleChangePasswordForm);
@@ -3463,8 +3873,14 @@ function initNavigation() {
     openModal('fixed-bill-modal');
   });
 
+  initTransactionExportMenu();
+
   // CSV Export
-  document.getElementById('export-transactions-csv')?.addEventListener('click', exportTransactionsCSV);
+  document.getElementById('tx-export-pdf')?.addEventListener('click', exportTransactionsPDF);
+  document.getElementById('export-transactions-csv')?.addEventListener('click', () => exportTransactionsCSV());
+  document.getElementById('tx-export-csv')?.addEventListener('click', () => {
+    exportTransactionsCSV(getFilteredTransactions(), 'nossagrana_extrato_filtrado.csv');
+  });
   document.getElementById('export-accounts-csv')?.addEventListener('click', exportAccountsCSV);
   document.getElementById('export-goals-csv')?.addEventListener('click', exportGoalsCSV);
 
@@ -4719,6 +5135,58 @@ window.executeBulkLink = async (fixedBillId) => {
 // ============================
 // CSV Export Functions
 // ============================
+function initTransactionExportMenu() {
+  const menu = document.getElementById('tx-export-menu');
+  if (!menu) return;
+  menu.addEventListener('click', (event) => {
+    if (event.target.closest('button')) menu.open = false;
+  });
+  document.addEventListener('click', (event) => {
+    if (!menu.contains(event.target)) menu.open = false;
+  });
+  menu.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      menu.open = false;
+      menu.querySelector('summary').focus();
+    }
+  });
+}
+
+function exportTransactionsPDF() {
+  const transactions = getFilteredTransactions();
+  if (transactions.length === 0) {
+    showToast('Sem dados', 'Nenhuma transação para exportar.', 'warning');
+    return;
+  }
+  const generatedAt = new Date();
+  const category = document.getElementById('tx-filter-category')?.value;
+  const accountId = document.getElementById('tx-filter-account')?.value;
+  const who = document.getElementById('tx-filter-who')?.value;
+  const lastDay = new Date(generatedAt.getFullYear(), generatedAt.getMonth() + 1, 0);
+  const html = createTransactionStatement({
+    transactions,
+    searchQuery: state.txSearchQuery,
+    accounts: state.accounts,
+    familyProfiles: state.familyProfiles,
+    generatedAt,
+    filters: {
+      category: category || 'Todas as categorias',
+      account: accountId ? (state.accounts.find(a => a.id === accountId)?.name || accountId) : 'Todas as contas',
+      who: who ? (state.familyProfiles?.[who]?.name || who) : 'Todos os membros',
+      future: state.txShowFuture ? 'Incluídos' : 'Ocultos: apenas datas até ' + lastDay.toLocaleDateString('pt-BR')
+    }
+  });
+  const preview = window.open('', '_blank');
+  if (!preview) {
+    showToast('Janela bloqueada', 'Permita a abertura de janelas para visualizar e salvar o extrato em PDF.', 'warning');
+    return;
+  }
+  preview.opener = null;
+  preview.document.open();
+  preview.document.write(html);
+  preview.document.close();
+}
+
 function downloadCSV(filename, csvContent) {
   // BOM for UTF-8 encoding in Excel
   const bom = '\uFEFF';
@@ -4730,28 +5198,28 @@ function downloadCSV(filename, csvContent) {
   URL.revokeObjectURL(link.href);
 }
 
-function exportTransactionsCSV() {
-  if (state.transactions.length === 0) {
+function exportTransactionsCSV(transactions = state.transactions, filename = 'nossagrana_transacoes.csv') {
+  if (transactions.length === 0) {
     showToast('Sem dados', 'Nenhuma transação para exportar.', 'warning');
     return;
   }
   const header = 'Data;Descrição;Categoria;Tipo;Valor;Conta;Pago;Criado por\n';
-  const rows = state.transactions.map(t => {
+  const rows = transactions.map(t => {
     const d = t.date?.toDate ? t.date.toDate() : new Date(t.date);
     const acc = state.accounts.find(a => a.id === t.accountId);
     return [
       d.toLocaleDateString('pt-BR'),
       `"${(t.description || '').replace(/"/g, '""')}"`,
-      `"${t.category}"`,
+      `"${(t.category || '').replace(/"/g, '""')}"`,
       t.type,
       t.amount.toFixed(2).replace('.', ','),
-      `"${acc?.name || '-'}"`,
+      `"${(acc?.name || '-').replace(/"/g, '""')}"`,
       t.isPaid ? 'Sim' : 'Não',
-      `"${t.createdByName || '-'}"`
+      `"${(t.createdByName || '-').replace(/"/g, '""')}"`
     ].join(';');
   }).join('\n');
-  downloadCSV('nossagrana_transacoes.csv', header + rows);
-  showToast('Exportado!', `${state.transactions.length} transações exportadas.`, 'success');
+  downloadCSV(filename, header + rows);
+  showToast('Exportado!', `${transactions.length} transações exportadas.`, 'success');
 }
 
 function exportAccountsCSV() {
@@ -5171,7 +5639,9 @@ function getAuthError(code) {
 let deferredPrompt;
 
 window.addEventListener('beforeinstallprompt', (e) => {
-  // Prevent the mini-infobar from appearing on mobile
+  // No Vite dev: deixe o navegador cuidar do prompt e evite ruído no console.
+  if (import.meta.env.DEV) return;
+  // Em produção usamos nosso próprio botão de instalação.
   e.preventDefault();
   // Stash the event so it can be triggered later.
   deferredPrompt = e;
@@ -5183,6 +5653,17 @@ window.addEventListener('beforeinstallprompt', (e) => {
 });
 
 function initPWAInfo() {
+  if (import.meta.env.DEV) {
+    // A previously registered production SW can keep serving stale dev assets after F5.
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(registrations =>
+        Promise.all(registrations.map(reg => reg.unregister()))
+      ).catch(() => {});
+    }
+    if ('caches' in window) {
+      caches.keys().then(keys => Promise.all(keys.map(key => caches.delete(key)))).catch(() => {});
+    }
+  }
   const installBtn = document.getElementById('install-app-btn');
   if (installBtn) {
     installBtn.addEventListener('click', async () => {
@@ -5199,8 +5680,8 @@ function initPWAInfo() {
     });
   }
 
-  // Registra Service Worker
-  if ('serviceWorker' in navigator) {
+  // Service Worker só em produção; no Vite dev ele causa cache/ruído desnecessário.
+  if (!import.meta.env.DEV && 'serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').then(reg => {
       console.log('SW Registrado:', reg.scope);
     }).catch(err => {

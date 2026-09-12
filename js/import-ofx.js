@@ -68,7 +68,9 @@ export function initImport(onImport, getAccounts, getTransactions, getFamilyProf
   const fileNameEl = document.getElementById('import-file-name');
   const previewEl = document.getElementById('import-preview');
 
-  fileInput?.addEventListener('change', async (e) => {
+  if (!fileInput) return;
+  // Replace the handler when app data refreshes; never accumulate listeners.
+  fileInput.onchange = async (e) => {
     const files = Array.from(e.target.files);
     if (!files || files.length === 0) return;
 
@@ -154,6 +156,7 @@ export function initImport(onImport, getAccounts, getTransactions, getFamilyProf
       }
 
       const family = getFamilyProfiles ? getFamilyProfiles() : null;
+      const seenFitids = new Set();
       const importCounts = new Map(); // Rastreador local para o lote atual
 
       allTransactions = allTransactions.map(t => {
@@ -168,7 +171,10 @@ export function initImport(onImport, getAccounts, getTransactions, getFamilyProf
 
         const isInstallment = t.description.includes('/') || t.installmentInfo;
         
-        if (t.fitid && dbFitids.has(t.fitid)) {
+        const fitidKey = JSON.stringify([t.bankAccountKey || '', t.fitid]);
+        if (t.fitid && seenFitids.has(fitidKey)) {
+            isDuplicate = true;
+        } else if (t.fitid && dbFitids.has(t.fitid)) {
             // Existe exatamente essa mesma transação já importada via OFX
             isDuplicate = true;
             importCounts.set(t.fitid, true);
@@ -216,6 +222,7 @@ export function initImport(onImport, getAccounts, getTransactions, getFamilyProf
             }
         }
 
+        if (t.fitid) seenFitids.add(fitidKey);
         return { ...t, category: cat, isDuplicate, updateTargetId };
       });
     }
@@ -234,7 +241,7 @@ export function initImport(onImport, getAccounts, getTransactions, getFamilyProf
 
     // Reset file input so same files can be re-selected
     fileInput.value = '';
-  });
+  };
 }
 
 /**
@@ -467,7 +474,8 @@ function parseGenericCSV(lines) {
  */
 function parseOFX(text) {
   const txs = [];
-  const isCreditCard = text.includes('<CREDITCARDMSGSRSV1>') || text.includes('<CCSTMTTRNRS>');
+  const isCreditCard = /<CREDITCARDMSGSRSV1>|<CCSTMTTRNRS>/i.test(text);
+  const bankAccountKey = [extractOFXTag(text, 'BANKID') || '', extractOFXTag(text, 'ACCTID') || '', isCreditCard ? 'card' : 'bank'].join('|');
   const stmtRegex = /<STMTTRN>([\s\S]*?)<\/STMTTRN>/gi;
   let match;
 
@@ -494,7 +502,9 @@ function parseOFX(text) {
 
       const rawDesc = memo || name || type || 'Transação OFX';
       const cleanDesc = cleanDescription(rawDesc);
-      const pm = isCreditCard ? 'credito' : detectPaymentMethod(rawDesc);
+      const detectedMethod = detectPaymentMethod(rawDesc);
+      // A bank-account credit is still a cash movement, not a credit-card purchase.
+      const pm = isCreditCard ? 'credito' : (detectedMethod === 'credito' ? 'outros' : detectedMethod);
 
       // --- Detecção Automática de Parcelas (OFX) ---
       const instMatch = cleanDesc.match(/ - Parcela (\d+)\/(\d+)$/i) || 
@@ -510,6 +520,7 @@ function parseOFX(text) {
         if (current >= 1 && total > 1 && total >= current) {
           txs.push({
             fitid: fitid,
+            bankAccountKey,
             date: new Date(date),
             description: cleanDesc,
             amount,
@@ -536,6 +547,7 @@ function parseOFX(text) {
 
       txs.push({
         fitid: fitid,
+        bankAccountKey,
         date,
         description: cleanDesc,
         amount: Math.abs(rawVal),
@@ -820,7 +832,7 @@ function renderPreview(container, transactions, onImport, getAccounts, getFamily
   });
 
   // Confirm import
-  document.getElementById('import-confirm-btn')?.addEventListener('click', () => {
+  document.getElementById('import-confirm-btn')?.addEventListener('click', async (event) => {
     const accountId = document.getElementById('import-account-select')?.value;
     const userId = document.getElementById('import-user-select')?.value;
 
@@ -840,8 +852,19 @@ function renderPreview(container, transactions, onImport, getAccounts, getFamily
       return;
     }
 
-    onImport(selectedTxs, accountId, userId);
-    container.classList.add('hidden');
-    container.innerHTML = '';
+    const button = event.currentTarget;
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+      const started = await onImport(selectedTxs, accountId, userId);
+      if (started !== false) {
+        container.classList.add('hidden');
+        container.innerHTML = '';
+      }
+    } catch (error) {
+      showToast('Erro na importação', error.message, 'error');
+    } finally {
+      button.disabled = false;
+    }
   });
 }

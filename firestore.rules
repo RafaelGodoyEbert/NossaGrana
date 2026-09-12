@@ -1,57 +1,152 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // --- Funções Auxiliares ---
     function isLoggedIn() {
       return request.auth != null;
     }
 
-    // Verifica se o usuário pertence à família do documento
-    function isFamilyMember(familyId) {
-      return isLoggedIn() &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.familyId == familyId;
+    function familyData(familyId) {
+      return get(/databases/$(database)/documents/families/$(familyId)).data;
     }
 
-    // --- Usuários ---
+    function isFamilyAdmin(familyId) {
+      return isLoggedIn() && familyData(familyId).createdBy == request.auth.uid;
+    }
+
+    function isActiveFamilyMember(familyId) {
+      return isLoggedIn() && (
+        isFamilyAdmin(familyId) ||
+        (request.auth.uid in familyData(familyId).members)
+      );
+    }
+
+    function hasAccessGrant(familyId) {
+      return isLoggedIn() &&
+        ('accessGrants' in familyData(familyId)) &&
+        (request.auth.uid in familyData(familyId).accessGrants);
+    }
+
+    function hasRetainedAccess(familyId) {
+      return hasAccessGrant(familyId) &&
+        familyData(familyId).accessGrants[request.auth.uid].retainAfterRemoval == true;
+    }
+
+    function canReadFamily(familyId) {
+      return isActiveFamilyMember(familyId) || hasRetainedAccess(familyId);
+    }
+
+    function accountAllowed(familyId, accountId) {
+      return isFamilyAdmin(familyId) ||
+        (canReadFamily(familyId) && (
+          !hasAccessGrant(familyId) ||
+          familyData(familyId).accessGrants[request.auth.uid].scope == 'all' ||
+          accountId in familyData(familyId).accessGrants[request.auth.uid].accountIds
+        ));
+    }
+
+    function dateAllowed(familyId, value) {
+      return isFamilyAdmin(familyId) ||
+        (canReadFamily(familyId) && (
+          !hasAccessGrant(familyId) ||
+          (
+            (familyData(familyId).accessGrants[request.auth.uid].from == null ||
+             value >= familyData(familyId).accessGrants[request.auth.uid].from) &&
+            (familyData(familyId).accessGrants[request.auth.uid].until == null ||
+             value <= familyData(familyId).accessGrants[request.auth.uid].until)
+          )
+        ));
+    }
+
+    function hasFullPlanningAccess(familyId) {
+      return isActiveFamilyMember(familyId) && (
+        isFamilyAdmin(familyId) ||
+        !hasAccessGrant(familyId) ||
+        (
+          familyData(familyId).accessGrants[request.auth.uid].scope == 'all' &&
+          familyData(familyId).accessGrants[request.auth.uid].from == null &&
+          familyData(familyId).accessGrants[request.auth.uid].until == null
+        )
+      );
+    }
+
+    function isSelfJoin() {
+      return isLoggedIn() &&
+        !(request.auth.uid in resource.data.members) &&
+        (request.auth.uid in request.resource.data.members) &&
+        request.resource.data.members.size() == resource.data.members.size() + 1 &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members']);
+    }
+
+    match /familyInvites/{code} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if isLoggedIn() &&
+        get(/databases/$(database)/documents/families/$(request.resource.data.familyId)).data.createdBy == request.auth.uid;
+      allow delete: if isLoggedIn() &&
+        get(/databases/$(database)/documents/families/$(resource.data.familyId)).data.createdBy == request.auth.uid;
+    }
+
     match /users/{userId} {
-      allow read: if isLoggedIn() && request.auth.uid == userId;
+      allow read: if isLoggedIn() && (
+        request.auth.uid == userId ||
+        (('familyId' in resource.data) && canReadFamily(resource.data.familyId))
+      );
       allow write: if isLoggedIn() && request.auth.uid == userId;
     }
 
-    // --- Famílias ---
     match /families/{familyId} {
-      allow read: if isFamilyMember(familyId);
-      allow create: if isLoggedIn();
-      allow update: if isFamilyMember(familyId);
+      allow read: if canReadFamily(familyId);
+      allow create: if isLoggedIn() &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.auth.uid in request.resource.data.members;
+      allow update: if isFamilyAdmin(familyId) || isSelfJoin();
     }
 
-    // --- Transações (compartilhadas por familyId) ---
     match /transactions/{docId} {
-      allow read: if isFamilyMember(resource.data.familyId);
-      allow create: if isLoggedIn() && isFamilyMember(request.resource.data.familyId);
-      allow update, delete: if isFamilyMember(resource.data.familyId);
+      allow read: if canReadFamily(resource.data.familyId) &&
+        accountAllowed(resource.data.familyId, resource.data.accountId) &&
+        dateAllowed(resource.data.familyId, resource.data.date);
+      allow create: if isActiveFamilyMember(request.resource.data.familyId) &&
+        accountAllowed(request.resource.data.familyId, request.resource.data.accountId) &&
+        dateAllowed(request.resource.data.familyId, request.resource.data.date);
+      allow update: if isActiveFamilyMember(resource.data.familyId) &&
+        accountAllowed(resource.data.familyId, resource.data.accountId) &&
+        dateAllowed(resource.data.familyId, resource.data.date) &&
+        isActiveFamilyMember(request.resource.data.familyId) &&
+        accountAllowed(request.resource.data.familyId, request.resource.data.accountId) &&
+        dateAllowed(request.resource.data.familyId, request.resource.data.date);
+      allow delete: if isActiveFamilyMember(resource.data.familyId) &&
+        accountAllowed(resource.data.familyId, resource.data.accountId) &&
+        dateAllowed(resource.data.familyId, resource.data.date);
     }
 
-    // --- Contas ---
     match /accounts/{docId} {
-      allow read: if isFamilyMember(resource.data.familyId);
-      allow create: if isLoggedIn() && isFamilyMember(request.resource.data.familyId);
-      allow update, delete: if isFamilyMember(resource.data.familyId);
+      allow read: if canReadFamily(resource.data.familyId) &&
+        accountAllowed(resource.data.familyId, docId);
+      allow create: if isActiveFamilyMember(request.resource.data.familyId) &&
+        (isFamilyAdmin(request.resource.data.familyId) ||
+         !hasAccessGrant(request.resource.data.familyId) ||
+         familyData(request.resource.data.familyId).accessGrants[request.auth.uid].scope == 'all');
+      allow update, delete: if isActiveFamilyMember(resource.data.familyId) &&
+        accountAllowed(resource.data.familyId, docId);
     }
 
-    // --- Orçamentos ---
     match /budgets/{docId} {
-      allow read: if isFamilyMember(resource.data.familyId);
-      allow create: if isLoggedIn() && isFamilyMember(request.resource.data.familyId);
-      allow update, delete: if isFamilyMember(resource.data.familyId);
+      allow read: if hasFullPlanningAccess(resource.data.familyId);
+      allow create: if hasFullPlanningAccess(request.resource.data.familyId);
+      allow update, delete: if hasFullPlanningAccess(resource.data.familyId);
     }
 
-    // --- Metas ---
     match /goals/{docId} {
-      allow read: if isFamilyMember(resource.data.familyId);
-      allow create: if isLoggedIn() && isFamilyMember(request.resource.data.familyId);
-      allow update, delete: if isFamilyMember(resource.data.familyId);
+      allow read: if hasFullPlanningAccess(resource.data.familyId);
+      allow create: if hasFullPlanningAccess(request.resource.data.familyId);
+      allow update, delete: if hasFullPlanningAccess(resource.data.familyId);
+    }
+
+    match /fixedBills/{docId} {
+      allow read: if hasFullPlanningAccess(resource.data.familyId);
+      allow create: if hasFullPlanningAccess(request.resource.data.familyId);
+      allow update, delete: if hasFullPlanningAccess(resource.data.familyId);
     }
   }
 }

@@ -536,6 +536,54 @@ td.despesa, td.expense { color: var(--expense-color); font-weight: 600; }
   margin-bottom: var(--space-lg);
 }
 
+/* --- Transaction export menu --- */
+.tx-primary-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.tx-export { position: relative; }
+.tx-export-trigger { list-style: none; color: var(--text-primary); }
+.tx-export-trigger:hover { color: var(--text-primary); background: var(--bg-secondary); }
+.tx-export-trigger svg { width: 16px; height: 16px; }
+.tx-export-trigger::-webkit-details-marker { display: none; }
+.tx-export-chevron { margin-left: 8px; font-size: 0.65rem; transition: transform var(--transition-fast); }
+.tx-export[open] .tx-export-chevron { transform: rotate(180deg); }
+.tx-export[open] .tx-export-trigger { border-color: var(--primary-300); }
+.tx-export-options {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 50;
+  width: 248px;
+  max-width: calc(100vw - 32px);
+  padding: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  box-shadow: var(--shadow-lg);
+}
+.tx-export-label { margin: 5px 10px 8px; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.08em; color: var(--text-secondary); }
+.tx-export-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 10px;
+  border: none;
+  border-radius: var(--border-radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tx-export-option:hover, .tx-export-option:focus-visible { background: var(--bg-tertiary); }
+.tx-export-trigger:focus-visible, .tx-export-option:focus-visible { outline: 2px solid var(--primary-400); outline-offset: 2px; }
+.tx-export-option strong { display: block; font-size: 0.875rem; }
+.tx-export-option small { display: block; margin-top: 3px; font-size: 0.75rem; color: var(--text-secondary); }
+.tx-export-icon { display: grid; place-items: center; width: 36px; height: 40px; border-radius: 8px; font-size: 1.1rem; }
+.tx-export-icon svg { width: 22px; height: 22px; }
+.tx-export-icon-pdf { background: var(--expense-bg); color: var(--expense-color); }
+.tx-export-icon-csv { background: var(--income-bg); color: var(--income-color); }
+@media (max-width: 768px) { .tx-export-options { left: 0; right: auto; } }
+
 /* --- Inline Editing (Excel-style) --- */
 td.editable-cell {
   cursor: pointer;
@@ -766,6 +814,8 @@ thead th {
 /* Search Summary Bar */
 .table-summary-bar {
   display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
   justify-content: space-between;
   align-items: center;
   padding: 10px 20px;
@@ -1122,3 +1172,61 @@ thead th {
   70% { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
   100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
 }
+
+/* Non-blocking import synchronization status, visible on every page. */
+.import-sync-status { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 18px; margin-bottom: 20px; border: 1px solid var(--border-color); border-left: 4px solid var(--primary-500); border-radius: 12px; background: var(--bg-secondary); }
+.import-sync-status strong { font-size: 0.9rem; }
+.import-sync-status p { margin-top: 3px; font-size: 0.8rem; color: var(--text-secondary); }
+.import-sync-status progress { width: 180px; min-width: 100px; height: 9px; accent-color: var(--primary-500); }
+.import-sync-status[data-status="error"] { border-left-color: var(--expense-color); }
+@media (max-width: 600px) { .import-sync-status { flex-direction: column; align-items: stretch; } .import-sync-status progress { width: 100%; } }
+
+
+/* --- Family access control --- */
+.family-access-status {
+  display:flex; align-items:center; gap:12px; padding:13px 18px; margin-bottom:20px;
+  border:1px solid var(--border-color); border-left:4px solid var(--warning-color);
+  border-radius:12px; background:var(--bg-secondary);
+}
+.family-access-status-icon { font-size:1.15rem; color:var(--warning-color); }
+.family-access-status strong { font-size:.9rem; }
+.family-access-status p { margin-top:3px; font-size:.8rem; color:var(--text-secondary); }
+.family-member-card {
+  display:flex; align-items:center; gap:12px; padding:13px; margin-bottom:8px;
+  background:var(--bg-tertiary); border:1px solid transparent; border-radius:10px;
+}
+.family-member-card.historical { border-color:rgba(245,158,11,.28); }
+.family-member-avatar { width:42px!important; height:42px!important; font-size:1rem!important; flex:0 0 auto; overflow:hidden; position:relative; border-radius:50%; }
+.family-member-info { min-width:0; flex:1; }
+.family-member-name { font-size:.95rem; font-weight:650; }
+.family-member-email { font-size:.78rem; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; }
+.family-member-access { margin-top:5px; font-size:.76rem; color:var(--text-secondary); }
+.family-member-access i { margin-right:5px; }
+.family-member-actions { display:flex; gap:7px; flex-wrap:wrap; justify-content:flex-end; }
+.family-history-badge { display:inline-block; margin-top:6px; padding:2px 7px; border-radius:999px; font-size:.68rem; background:rgba(245,158,11,.12); color:var(--warning-color); }
+.family-section-heading { display:flex; justify-content:space-between; align-items:center; margin:14px 0 10px; }
+.family-history-heading { margin-top:22px; }
+.family-you { font-weight:400; color:var(--text-secondary); }
+.family-access-modal-content { max-width:620px; }
+.family-access-modal-subtitle { color:var(--text-secondary); margin:-4px 0 18px; }
+.family-remove-options { padding:12px; border:1px solid rgba(239,68,68,.2); border-radius:10px; background:rgba(239,68,68,.04); }
+.family-remove-options small, #family-access-fields small { display:block; margin-top:4px; color:var(--text-secondary); font-size:.72rem; }
+.family-access-accounts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; max-height:220px; overflow:auto; }
+.family-access-account-item { display:flex; align-items:center; gap:9px; padding:9px; border:1px solid var(--border-color); border-radius:9px; cursor:pointer; }
+.family-access-account-item input { width:auto; }
+.family-access-account-item span { min-width:0; }
+.family-access-account-item strong, .family-access-account-item small { display:block; }
+.family-access-account-item small { color:var(--text-secondary); margin-top:2px; }
+.family-access-note { display:flex; gap:8px; padding:10px 12px; margin:6px 0 14px; border-radius:9px; background:var(--bg-tertiary); color:var(--text-secondary); font-size:.76rem; }
+.family-access-fields-disabled { opacity:.45; pointer-events:none; }
+.family-readonly .editable-cell { pointer-events:none; }
+.family-readonly .account-card-actions { display:none!important; }
+@media (max-width:700px) {
+  .family-member-card { align-items:flex-start; flex-wrap:wrap; }
+  .family-member-actions { width:100%; justify-content:flex-start; padding-left:54px; }
+  .family-access-accounts { grid-template-columns:1fr; }
+}
+
+.family-access-feedback { min-height:20px; margin:8px 0 10px; font-size:.78rem; color:var(--text-secondary); }
+.family-access-feedback.error { color:var(--expense-color); }
+.family-access-feedback.success { color:var(--income-color); }
